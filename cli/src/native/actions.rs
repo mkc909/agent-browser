@@ -1071,7 +1071,10 @@ async fn launch_safari(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
         // Use any available high port
         let listener = std::net::TcpListener::bind("127.0.0.1:0")
             .map_err(|e| format!("Failed to find free port: {}", e))?;
-        listener.local_addr().unwrap().port()
+        listener
+            .local_addr()
+            .map_err(|e| format!("Failed to get local address: {}", e))?
+            .port()
     };
 
     let driver = safari::launch_safaridriver(actual_port)?;

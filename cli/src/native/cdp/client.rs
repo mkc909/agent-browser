@@ -118,10 +118,14 @@ impl CdpClient {
                 .map_err(|e| format!("Failed to send CDP command: {}", e))?;
         }
 
-        let response = tokio::time::timeout(std::time::Duration::from_secs(30), rx)
-            .await
-            .map_err(|_| format!("CDP command timed out: {}", method))?
-            .map_err(|_| "CDP response channel closed".to_string())?;
+        let response = match tokio::time::timeout(std::time::Duration::from_secs(30), rx).await {
+            Ok(Ok(resp)) => resp,
+            Ok(Err(_)) => return Err("CDP response channel closed".to_string()),
+            Err(_) => {
+                self.pending.lock().await.remove(&id);
+                return Err(format!("CDP command timed out: {}", method));
+            }
+        };
 
         if let Some(error) = response.error {
             return Err(format!("CDP error ({}): {}", method, error));

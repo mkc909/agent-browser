@@ -198,12 +198,27 @@ fn looks_like_http(line: &str) -> bool {
 async fn shutdown_signal() {
     #[cfg(unix)]
     {
-        let mut sigint = signal::unix::signal(signal::unix::SignalKind::interrupt())
-            .expect("Failed to install SIGINT handler");
-        let mut sigterm = signal::unix::signal(signal::unix::SignalKind::terminate())
-            .expect("Failed to install SIGTERM handler");
-        let mut sighup = signal::unix::signal(signal::unix::SignalKind::hangup())
-            .expect("Failed to install SIGHUP handler");
+        let mut sigint = match signal::unix::signal(signal::unix::SignalKind::interrupt()) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("Failed to install SIGINT handler: {}", e);
+                process::exit(1);
+            }
+        };
+        let mut sigterm = match signal::unix::signal(signal::unix::SignalKind::terminate()) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("Failed to install SIGTERM handler: {}", e);
+                process::exit(1);
+            }
+        };
+        let mut sighup = match signal::unix::signal(signal::unix::SignalKind::hangup()) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("Failed to install SIGHUP handler: {}", e);
+                process::exit(1);
+            }
+        };
 
         tokio::select! {
             _ = sigint.recv() => {}
@@ -214,9 +229,10 @@ async fn shutdown_signal() {
 
     #[cfg(windows)]
     {
-        signal::ctrl_c()
-            .await
-            .expect("Failed to install Ctrl+C handler");
+        if let Err(e) = signal::ctrl_c().await {
+            eprintln!("Failed to install Ctrl+C handler: {}", e);
+            process::exit(1);
+        }
     }
 }
 
