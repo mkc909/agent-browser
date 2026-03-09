@@ -18,15 +18,41 @@ export type SandboxResult = {
 
 const SNAPSHOT_ID = process.env.AGENT_BROWSER_SNAPSHOT_ID;
 
+/**
+ * Returns credentials to spread into Sandbox.create() calls.
+ * When explicit env vars are set they take precedence; otherwise returns
+ * an empty object so the SDK falls back to VERCEL_OIDC_TOKEN automatically.
+ */
+export function getSandboxCredentials():
+  | { token: string; teamId: string; projectId: string }
+  | Record<string, never> {
+  if (
+    process.env.VERCEL_TOKEN &&
+    process.env.VERCEL_TEAM_ID &&
+    process.env.VERCEL_PROJECT_ID
+  ) {
+    return {
+      token: process.env.VERCEL_TOKEN,
+      teamId: process.env.VERCEL_TEAM_ID,
+      projectId: process.env.VERCEL_PROJECT_ID,
+    };
+  }
+  return {};
+}
+
 async function createSandbox(): Promise<InstanceType<typeof Sandbox>> {
+  const credentials = getSandboxCredentials();
+
   if (SNAPSHOT_ID) {
     return Sandbox.create({
+      ...credentials,
       source: { type: "snapshot", snapshotId: SNAPSHOT_ID },
       timeout: 120_000,
     });
   }
 
   const sandbox = await Sandbox.create({
+    ...credentials,
     runtime: "node24",
     timeout: 120_000,
   });
@@ -143,6 +169,7 @@ export async function runCommands(
  */
 export async function createSnapshot(): Promise<string> {
   const sandbox = await Sandbox.create({
+    ...getSandboxCredentials(),
     runtime: "node24",
     timeout: 300_000,
   });
