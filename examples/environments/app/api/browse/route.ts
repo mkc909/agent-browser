@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import * as ab from "@/lib/agent-browser";
+import * as sandbox from "@/lib/agent-browser-sandbox";
 import { ALLOWED_URLS } from "@/lib/constants";
 import { minuteRateLimit, dailyRateLimit } from "@/lib/rate-limit";
 
@@ -36,15 +36,16 @@ export async function POST(req: NextRequest) {
     }
 
     if (body.action === "screenshot") {
-      const result = await ab.screenshotUrl(url, {
+      const result = await sandbox.screenshotUrl(url, {
         fullPage: body.fullPage,
       });
       return NextResponse.json(result);
     }
 
     if (body.action === "snapshot") {
-      const result = await ab.snapshotUrl(url, {
-        selector: body.selector,
+      const result = await sandbox.snapshotUrl(url, {
+        interactive: true,
+        compact: true,
       });
       return NextResponse.json(result);
     }

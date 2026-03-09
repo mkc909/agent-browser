@@ -1,7 +1,6 @@
 "use server";
 
 import { headers } from "next/headers";
-import * as serverless from "@/lib/agent-browser";
 import * as sandbox from "@/lib/agent-browser-sandbox";
 import { ALLOWED_URLS } from "@/lib/constants";
 import { minuteRateLimit, dailyRateLimit } from "@/lib/rate-limit";
@@ -28,10 +27,6 @@ function isAllowedUrl(url: string): boolean {
 }
 
 export type EnvStatus = {
-  serverless: {
-    hasChromiumPath: boolean;
-    isVercel: boolean;
-  };
   sandbox: {
     hasSnapshot: boolean;
   };
@@ -39,11 +34,6 @@ export type EnvStatus = {
 
 export async function getEnvStatus(): Promise<EnvStatus> {
   return {
-    serverless: {
-      hasChromiumPath: !!process.env.CHROMIUM_PATH,
-      isVercel:
-        !!process.env.VERCEL || !!process.env.AWS_LAMBDA_FUNCTION_NAME,
-    },
     sandbox: {
       hasSnapshot: !!process.env.AGENT_BROWSER_SNAPSHOT_ID,
     },
@@ -64,17 +54,8 @@ export type SnapshotResult = {
   error?: string;
 };
 
-export type Mode = "serverless" | "sandbox";
-
-/**
- * Server action: screenshot a URL.
- *
- * mode="serverless" -- runs @sparticuz/chromium + puppeteer-core in the function
- * mode="sandbox"    -- runs agent-browser inside a Vercel Sandbox microVM
- */
 export async function takeScreenshot(
   url: string,
-  mode: Mode = "serverless",
 ): Promise<ScreenshotResult> {
   if (!isAllowedUrl(url)) {
     return { ok: false, error: "URL not allowed" };
@@ -86,12 +67,7 @@ export async function takeScreenshot(
   }
 
   try {
-    if (mode === "sandbox") {
-      const { screenshot, title } = await sandbox.screenshotUrl(url);
-      return { ok: true, screenshot, title };
-    }
-
-    const { screenshot, title } = await serverless.screenshotUrl(url);
+    const { screenshot, title } = await sandbox.screenshotUrl(url);
     return { ok: true, screenshot, title };
   } catch (err) {
     return {
@@ -101,15 +77,8 @@ export async function takeScreenshot(
   }
 }
 
-/**
- * Server action: snapshot a URL (accessibility tree).
- *
- * mode="serverless" -- runs @sparticuz/chromium + puppeteer-core in the function
- * mode="sandbox"    -- runs agent-browser inside a Vercel Sandbox microVM
- */
 export async function takeSnapshot(
   url: string,
-  mode: Mode = "serverless",
 ): Promise<SnapshotResult> {
   if (!isAllowedUrl(url)) {
     return { ok: false, error: "URL not allowed" };
@@ -121,15 +90,10 @@ export async function takeSnapshot(
   }
 
   try {
-    if (mode === "sandbox") {
-      const { snapshot, title } = await sandbox.snapshotUrl(url, {
-        interactive: true,
-        compact: true,
-      });
-      return { ok: true, snapshot, title };
-    }
-
-    const { snapshot, title } = await serverless.snapshotUrl(url);
+    const { snapshot, title } = await sandbox.snapshotUrl(url, {
+      interactive: true,
+      compact: true,
+    });
     return { ok: true, snapshot, title };
   } catch (err) {
     return {

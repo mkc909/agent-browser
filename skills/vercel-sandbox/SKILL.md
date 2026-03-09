@@ -7,18 +7,6 @@ description: Run agent-browser + Chrome inside Vercel Sandbox microVMs for brows
 
 Run agent-browser + headless Chrome inside ephemeral Vercel Sandbox microVMs. A Linux VM spins up on demand, executes browser commands, and shuts down. Works with any Vercel-deployed framework (Next.js, SvelteKit, Nuxt, Remix, Astro, etc.).
 
-## When to Use Sandbox vs Serverless
-
-| | Vercel Sandbox | Serverless (`@sparticuz/chromium`) |
-|---|---|---|
-| Binary size limit | None | 50MB compressed |
-| Session persistence | Yes, within a sandbox lifetime | No, fresh browser per request |
-| Multi-step workflows | Yes, run sequences of commands | Single request only |
-| Startup time | ~30s cold, sub-second with sandbox snapshot | ~2-3s |
-| Framework support | Any (Next.js, SvelteKit, Nuxt, etc.) | Next.js (or any Node.js serverless) |
-
-Use Sandbox when you need full Chrome, multi-step workflows, or longer execution times. Use serverless when you need fast single-request screenshots/snapshots.
-
 ## Dependencies
 
 ```bash
@@ -175,7 +163,7 @@ AGENT_BROWSER_SNAPSHOT_ID=snap_xxxxxxxxxxxx
 A helper script is available in the demo app:
 
 ```bash
-npx tsx examples/demo/scripts/create-snapshot.ts
+npx tsx examples/environments/scripts/create-snapshot.ts
 ```
 
 Recommended for any production deployment using the Sandbox pattern.
@@ -226,4 +214,4 @@ The pattern works identically across frameworks. The only difference is where yo
 
 ## Example
 
-See `examples/demo/` in the agent-browser repo for a working app with the Vercel Sandbox pattern, including a sandbox snapshot creation script and demo UI.
+See `examples/environments/` in the agent-browser repo for a working app with the Vercel Sandbox pattern, including a sandbox snapshot creation script and demo UI.

@@ -5,7 +5,6 @@ import { takeScreenshot, takeSnapshot, getEnvStatus } from "./actions/browse";
 import type {
   ScreenshotResult,
   SnapshotResult,
-  Mode,
   EnvStatus,
 } from "./actions/browse";
 import {
@@ -18,7 +17,14 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
-import { Loader2, Monitor, TriangleAlert, CircleX } from "lucide-react";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Loader2, Monitor, CircleX, Sun, Moon } from "lucide-react";
 
 const MOBILE_QUERY = "(max-width: 767px)";
 const subscribe = (cb: () => void) => {
@@ -26,11 +32,35 @@ const subscribe = (cb: () => void) => {
   mql.addEventListener("change", cb);
   return () => mql.removeEventListener("change", cb);
 };
-const getSnapshot = () => window.matchMedia(MOBILE_QUERY).matches;
+const getMobileSnapshot = () => window.matchMedia(MOBILE_QUERY).matches;
 const getServerSnapshot = () => false;
 
 function useIsMobile() {
-  return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+  return useSyncExternalStore(subscribe, getMobileSnapshot, getServerSnapshot);
+}
+
+function useTheme() {
+  const [theme, setThemeState] = useState<"light" | "dark">("light");
+
+  useEffect(() => {
+    const stored = localStorage.getItem("theme");
+    const initial =
+      stored === "dark" ||
+      (!stored && window.matchMedia("(prefers-color-scheme: dark)").matches)
+        ? "dark"
+        : "light";
+    setThemeState(initial);
+    document.documentElement.classList.toggle("dark", initial === "dark");
+  }, []);
+
+  const toggle = () => {
+    const next = theme === "dark" ? "light" : "dark";
+    setThemeState(next);
+    document.documentElement.classList.toggle("dark", next === "dark");
+    localStorage.setItem("theme", next);
+  };
+
+  return { theme, toggle };
 }
 
 type Action = "screenshot" | "snapshot";
@@ -75,33 +105,6 @@ function SegmentedControl<T extends string>({
   );
 }
 
-function EnvBadge({
-  label,
-  value,
-  status,
-}: {
-  label: string;
-  value?: string;
-  status: "ok" | "warn" | "missing";
-}) {
-  const variant =
-    status === "ok"
-      ? "outline"
-      : status === "warn"
-        ? "secondary"
-        : "destructive";
-  const icon =
-    status === "ok" ? "\u2713" : status === "warn" ? "\u26A0" : "\u2717";
-
-  return (
-    <Badge variant={variant} className="gap-1 font-mono text-[10px]">
-      <span>{icon}</span>
-      {label}
-      {value && <span className="opacity-60">{value}</span>}
-    </Badge>
-  );
-}
-
 function ErrorDisplay({ error }: { error: string }) {
   const isHtml = /<[a-z][\s\S]*>/i.test(error);
   const message = isHtml ? formatError(error) : error;
@@ -128,61 +131,12 @@ function ErrorDisplay({ error }: { error: string }) {
   );
 }
 
-function ModeCard({
-  selected,
-  onSelect,
-  title,
-  description,
-  badges,
-}: {
-  selected: boolean;
-  onSelect: () => void;
-  title: string;
-  description: string;
-  badges?: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onSelect}
-      className={`
-        w-full text-left rounded-lg border p-3 transition-all cursor-pointer
-        ${
-          selected
-            ? "border-ring bg-background ring-1 ring-ring/20"
-            : "border-input bg-background hover:border-ring/50"
-        }
-      `}
-    >
-      <div className="flex items-center gap-2 mb-1.5">
-        <div
-          className={`
-            size-3.5 rounded-full border-2 flex items-center justify-center shrink-0 transition-colors
-            ${selected ? "border-foreground" : "border-muted-foreground/30"}
-          `}
-        >
-          {selected && (
-            <div className="size-1.5 rounded-full bg-foreground" />
-          )}
-        </div>
-        <span className="text-[13px] font-semibold">{title}</span>
-      </div>
-      <p className="text-[12px] text-muted-foreground leading-relaxed pl-[22px] mb-2">
-        {description}
-      </p>
-      {badges && (
-        <div className="flex flex-wrap gap-1.5 pl-[22px]">{badges}</div>
-      )}
-    </button>
-  );
-}
-
 export default function Home() {
   const isMobile = useIsMobile();
+  const { theme, toggle: toggleTheme } = useTheme();
   const [url, setUrl] = useState<string>(ALLOWED_URLS[0]);
   const [loading, setLoading] = useState(false);
   const [action, setAction] = useState<Action>("screenshot");
-  const [mode, setMode] = useState<Mode>("serverless");
   const [screenshotResult, setScreenshotResult] =
     useState<ScreenshotResult | null>(null);
   const [snapshotResult, setSnapshotResult] =
@@ -206,10 +160,10 @@ export default function Home() {
 
     try {
       if (action === "screenshot") {
-        const result = await takeScreenshot(url, mode);
+        const result = await takeScreenshot(url);
         setScreenshotResult(result);
       } else {
-        const result = await takeSnapshot(url, mode);
+        const result = await takeSnapshot(url);
         setSnapshotResult(result);
       }
     } catch (err) {
@@ -226,14 +180,6 @@ export default function Home() {
 
   const hasResult = screenshotResult || snapshotResult;
 
-  const envWarning =
-    envStatus &&
-    mode === "serverless" &&
-    !envStatus.serverless.isVercel &&
-    !envStatus.serverless.hasChromiumPath
-      ? "Running locally without CHROMIUM_PATH. The app will try to use your system Chrome. Set CHROMIUM_PATH if Chrome is not in the default location."
-      : null;
-
   const controlsForm = (
     <form onSubmit={handleSubmit} className="p-5 space-y-5">
       <div className="space-y-1.5">
@@ -243,21 +189,24 @@ export default function Home() {
         >
           URL
         </Label>
-        <select
-          id="url-select"
+        <Select
           value={url}
-          onChange={(e) => {
-            setUrl(e.target.value);
+          onValueChange={(v) => {
+            if (v) setUrl(v);
             clearResults();
           }}
-          className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         >
-          {ALLOWED_URLS.map((u) => (
-            <option key={u} value={u}>
-              {u.replace("https://", "")}
-            </option>
-          ))}
-        </select>
+          <SelectTrigger id="url-select">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {ALLOWED_URLS.map((u) => (
+              <SelectItem key={u} value={u}>
+                {u.replace("https://", "")}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
 
       <div className="space-y-1.5">
@@ -282,77 +231,21 @@ export default function Home() {
         </p>
       </div>
 
-      <div className="space-y-1.5">
-        <Label className="text-[11px] text-muted-foreground uppercase tracking-wider">
-          Environment
-        </Label>
-        <div className="space-y-2">
-          <ModeCard
-            selected={mode === "serverless"}
-            onSelect={() => {
-              setMode("serverless");
-              clearResults();
-            }}
-            title="Serverless Function"
-            description="Runs @sparticuz/chromium + puppeteer-core directly in a Vercel function."
-            badges={
-              envStatus && (
-                <EnvBadge
-                  label="@sparticuz/chromium"
-                  status={
-                    envStatus.serverless.isVercel
-                      ? "ok"
-                      : envStatus.serverless.hasChromiumPath
-                        ? "ok"
-                        : "warn"
-                  }
-                  value={
-                    envStatus.serverless.isVercel
-                      ? "auto"
-                      : envStatus.serverless.hasChromiumPath
-                        ? "CHROMIUM_PATH"
-                        : "system Chrome"
-                  }
-                />
-              )
-            }
-          />
-          <ModeCard
-            selected={mode === "sandbox"}
-            onSelect={() => {
-              setMode("sandbox");
-              clearResults();
-            }}
-            title="Vercel Sandbox"
-            description={
-              envStatus?.sandbox.hasSnapshot
-                ? "Ephemeral microVM with agent-browser + Chrome pre-installed via sandbox snapshot."
-                : "Ephemeral microVM with agent-browser + Chrome. No binary size limits."
-            }
-            badges={
-              envStatus && (
-                <EnvBadge
-                  label="Sandbox snapshot"
-                  status={
-                    envStatus.sandbox.hasSnapshot ? "ok" : "warn"
-                  }
-                  value={
-                    envStatus.sandbox.hasSnapshot
-                      ? "sub-second startup"
-                      : "~30s cold start"
-                  }
-                />
-              )
-            }
-          />
-        </div>
-      </div>
-
-      {envWarning && (
+      {envStatus && !envStatus.sandbox.hasSnapshot && (
         <Alert>
-          <TriangleAlert className="size-4" />
-          <AlertTitle>Local development</AlertTitle>
-          <AlertDescription>{envWarning}</AlertDescription>
+          <AlertTitle className="text-[12px]">Sandbox snapshot not configured</AlertTitle>
+          <AlertDescription className="text-[11px]">
+            Without a sandbox snapshot, the VM installs agent-browser +
+            Chromium on every request (~30s). Create one with{" "}
+            <code className="text-[10px] bg-muted px-1 py-0.5 rounded">
+              npx tsx scripts/create-snapshot.ts
+            </code>{" "}
+            and set{" "}
+            <code className="text-[10px] bg-muted px-1 py-0.5 rounded">
+              AGENT_BROWSER_SNAPSHOT_ID
+            </code>{" "}
+            for sub-second startup.
+          </AlertDescription>
         </Alert>
       )}
 
@@ -425,7 +318,7 @@ export default function Home() {
     <div className="min-h-[300px] md:h-full flex flex-col items-center justify-center text-muted-foreground">
       <Monitor className="size-12 mb-4 opacity-30" strokeWidth={1} />
       <p className="text-sm font-medium mb-1">No result yet</p>
-      <p className="text-[13px]">Enter a URL and click Run</p>
+      <p className="text-[13px]">Pick a URL and click Run</p>
     </div>
   );
 
@@ -437,22 +330,32 @@ export default function Home() {
             <span className="text-sm font-semibold tracking-tight">
               agent-browser
             </span>
-            <span className="text-muted-foreground text-sm hidden sm:inline">/</span>
-            <span className="text-sm text-muted-foreground hidden sm:inline">
-              Demo
-            </span>
           </div>
-          <a
-            href="https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fagent-browser%2Fagent-browser%2Ftree%2Fmain%2Fexamples%2Fdemo&env=CHROMIUM_PATH&envDescription=Optional%20path%20to%20Chromium%20binary.%20Not%20needed%20on%20Vercel.&envLink=https%3A%2F%2Fgithub.com%2Fagent-browser%2Fagent-browser%2Ftree%2Fmain%2Fexamples%2Fdemo%23environment-variables&project-name=agent-browser-demo&repository-name=agent-browser-demo"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <img
-              src="https://vercel.com/button"
-              alt="Deploy with Vercel"
-              className="h-8"
-            />
-          </a>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={toggleTheme}
+              className="size-8 inline-flex items-center justify-center rounded-md border border-input bg-background text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+              aria-label="Toggle theme"
+            >
+              {theme === "dark" ? (
+                <Sun className="size-4" />
+              ) : (
+                <Moon className="size-4" />
+              )}
+            </button>
+            <a
+              href="https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fagent-browser%2Fagent-browser%2Ftree%2Fmain%2Fexamples%2Fenvironments&env=AGENT_BROWSER_SNAPSHOT_ID&envDescription=Sandbox%20snapshot%20ID%20for%20fast%20startup.%20Create%20with%20npx%20tsx%20scripts%2Fcreate-snapshot.ts&envLink=https%3A%2F%2Fgithub.com%2Fagent-browser%2Fagent-browser%2Ftree%2Fmain%2Fexamples%2Fenvironments%23sandbox-snapshots&project-name=agent-browser-environments&repository-name=agent-browser-environments"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <img
+                src="https://vercel.com/button"
+                alt="Deploy with Vercel"
+                className="h-8"
+              />
+            </a>
+          </div>
         </div>
       </header>
 
