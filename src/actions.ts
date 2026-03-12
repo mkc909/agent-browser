@@ -1067,6 +1067,10 @@ async function handleClose(
   command: Command & { action: 'close' },
   browser: BrowserManager
 ): Promise<Response> {
+  if (inspectServerInstance) {
+    inspectServerInstance.stop();
+    inspectServerInstance = null;
+  }
   await browser.close();
   return successResponse(command.id, { closed: true });
 }

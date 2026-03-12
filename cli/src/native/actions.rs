@@ -1192,28 +1192,11 @@ async fn handle_inspect(state: &mut DaemonState) -> Result<Value, String> {
 
     let target_id = mgr.active_target_id()?.to_string();
     let chrome_hp = mgr.chrome_host_port().to_string();
-
-    // Create a dedicated CDP session for DevTools (separate from the daemon's).
-    // This ensures DevTools gets fresh domain enablements (DOM.enable, CSS.enable, etc.)
-    // that trigger the initial state dumps Chrome sends to new sessions.
-    let attach_result: Value = mgr
-        .client
-        .send_command(
-            "Target.attachToTarget",
-            Some(json!({ "targetId": target_id, "flatten": true })),
-            None,
-        )
-        .await?;
-    let devtools_session_id = attach_result
-        .get("sessionId")
-        .and_then(|v| v.as_str())
-        .ok_or("Failed to create DevTools CDP session")?
-        .to_string();
-
     let proxy_handle = mgr.client.inspect_handle();
 
-    let server =
-        InspectServer::start(proxy_handle, devtools_session_id, chrome_hp).await?;
+    // Each DevTools WebSocket connection creates its own CDP session via
+    // Target.attachToTarget, so reconnections always get fresh domain state.
+    let server = InspectServer::start(proxy_handle, target_id, chrome_hp).await?;
     let url = format!("http://127.0.0.1:{}", server.port());
     open_url_in_browser(&url);
 
@@ -1321,6 +1304,10 @@ async fn handle_close(state: &mut DaemonState) -> Result<Value, String> {
     }
     state.safari_driver = None;
     state.backend_type = BackendType::Cdp;
+
+    if let Some(server) = state.inspect_server.take() {
+        server.shutdown();
+    }
 
     state.ref_map.clear();
     Ok(json!({ "closed": true }))
