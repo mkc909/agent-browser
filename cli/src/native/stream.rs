@@ -86,8 +86,14 @@ impl StreamServer {
         let client_slot_clone = client_slot.clone();
 
         tokio::spawn(async move {
-            accept_loop(listener, frame_tx_clone, client_count_clone, client_slot_clone, session_id)
-                .await;
+            accept_loop(
+                listener,
+                frame_tx_clone,
+                client_count_clone,
+                client_slot_clone,
+                session_id,
+            )
+            .await;
         });
 
         Ok((

@@ -46,9 +46,7 @@ pub async fn run_daemon(session: &str) {
                     Ok((stream_server, client_slot)) => {
                         stream_client = Some(client_slot.clone());
                         let stream_path = socket_dir.join(format!("{}.stream", session));
-                        if let Err(e) =
-                            fs::write(&stream_path, stream_server.port().to_string())
-                        {
+                        if let Err(e) = fs::write(&stream_path, stream_server.port().to_string()) {
                             eprintln!("Failed to write .stream file: {}", e);
                         }
                     }
