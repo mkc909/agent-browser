@@ -1056,7 +1056,8 @@ async function handleContent(
 
   let html: string;
   if (command.selector) {
-    html = await page.locator(command.selector).innerHTML();
+    const locator = browser.getLocator(command.selector);
+    html = await locator.innerHTML();
   } else {
     html = await page.content();
   }
@@ -1704,8 +1705,8 @@ async function handleIsChecked(
 }
 
 async function handleCount(command: CountCommand, browser: BrowserManager): Promise<Response> {
-  const page = browser.getPage();
-  const count = await page.locator(command.selector).count();
+  const locator = browser.getLocator(command.selector);
+  const count = await locator.count();
   return successResponse(command.id, { count });
 }
 
@@ -1713,8 +1714,8 @@ async function handleBoundingBox(
   command: BoundingBoxCommand,
   browser: BrowserManager
 ): Promise<Response> {
-  const page = browser.getPage();
-  const box = await page.locator(command.selector).boundingBox();
+  const locator = browser.getLocator(command.selector);
+  const box = await locator.boundingBox();
   return successResponse(command.id, { box });
 }
 
@@ -2172,8 +2173,8 @@ async function handleInnerText(
   command: InnerTextCommand,
   browser: BrowserManager
 ): Promise<Response> {
-  const page = browser.getPage();
-  const text = await page.locator(command.selector).innerText();
+  const locator = browser.getLocator(command.selector);
+  const text = await locator.innerText();
   return successResponse(command.id, { text });
 }
 
@@ -2182,7 +2183,8 @@ async function handleInnerHtml(
   browser: BrowserManager
 ): Promise<Response> {
   const page = browser.getPage();
-  const html = await page.locator(command.selector).innerHTML();
+  const locator = browser.getLocator(command.selector);
+  const html = await locator.innerHTML();
   return successResponse(command.id, { html, origin: page.url() });
 }
 
@@ -2200,8 +2202,8 @@ async function handleSetValue(
   command: SetValueCommand,
   browser: BrowserManager
 ): Promise<Response> {
-  const page = browser.getPage();
-  await page.locator(command.selector).fill(command.value);
+  const locator = browser.getLocator(command.selector);
+  await locator.fill(command.value);
   return successResponse(command.id, { set: true });
 }
 
