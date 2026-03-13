@@ -1,21 +1,21 @@
 /**
  * Node.js Daemon vs Rust Native Daemon benchmark.
  *
- * Compares the published npm version (Node.js daemon, from main) against
- * the Rust-only build from ctate/native-2, running real agent-browser
- * commands inside a Vercel Sandbox.
+ * Compares the last published npm version (Node.js daemon) against the
+ * Rust-only build from a given branch, running real agent-browser commands
+ * inside a Vercel Sandbox.
  *
  * Captures:
- *   - Command latency (per-scenario, with warmup + measured iterations)
+ *   - Command latency (per-scenario, with warmup + measured iterations + stddev)
  *   - Cold start time (first launch to daemon ready)
- *   - Daemon memory (RSS, peak RSS via /proc)
- *   - Daemon CPU time (user + system)
- *   - Process tree (daemon + children)
- *   - Binary size on disk
+ *   - Daemon memory (RSS, peak RSS) separated from browser memory
+ *   - Daemon CPU time
+ *   - Process tree (daemon + browser children)
+ *   - Binary and distribution size on disk
  *
  * Usage:
- *   pnpm bench                        # default: 5 iterations, 1 warmup
- *   pnpm bench -- --iterations 10     # override iterations
+ *   pnpm bench                        # default: 10 iterations, 1 warmup
+ *   pnpm bench -- --iterations 20     # override iterations
  *   pnpm bench -- --warmup 2          # override warmup count
  *   pnpm bench -- --json              # write results.json
  *   pnpm bench -- --branch my-branch  # override native branch (default: ctate/native-2)
@@ -71,7 +71,7 @@ if (!credentials.token || !credentials.teamId || !credentials.projectId) {
 
 function parseArgs() {
   const args = process.argv.slice(2);
-  let iterations = 5;
+  let iterations = 10;
   let warmup = 1;
   let json = false;
   let branch = "ctate/native-2";
@@ -168,6 +168,7 @@ async function shellSafe(sandbox: SandboxInstance, script: string): Promise<stri
 
 interface Stats {
   avgMs: number;
+  stddevMs: number;
   minMs: number;
   maxMs: number;
   p50Ms: number;
@@ -177,8 +178,12 @@ interface Stats {
 function computeStats(samples: number[]): Stats {
   const sorted = [...samples].sort((a, b) => a - b);
   const sum = sorted.reduce((a, b) => a + b, 0);
+  const avg = sum / sorted.length;
+  const variance =
+    sorted.reduce((acc, v) => acc + (v - avg) ** 2, 0) / sorted.length;
   return {
-    avgMs: Math.round(sum / sorted.length),
+    avgMs: Math.round(avg),
+    stddevMs: Math.round(Math.sqrt(variance)),
     minMs: sorted[0],
     maxMs: sorted[sorted.length - 1],
     p50Ms: sorted[Math.floor(sorted.length / 2)],
@@ -205,9 +210,11 @@ interface DaemonMetrics {
   binarySizeBytes: number;
   distributionSizeBytes: number;
   daemonProcesses: ProcessMetrics[];
-  totalRssKb: number;
-  totalVszKb: number;
-  peakRssKb: number;
+  browserProcesses: ProcessMetrics[];
+  daemonRssKb: number;
+  browserRssKb: number;
+  daemonPeakRssKb: number;
+  daemonCpuTimeSec: number;
   totalCpuTimeSec: number;
 }
 
@@ -336,30 +343,40 @@ async function collectDaemonMetrics(
     }
   }
 
-  const processes: ProcessMetrics[] = [];
-  let peakRssKb = 0;
+  const daemonProcs: ProcessMetrics[] = [];
+  const browserProcs: ProcessMetrics[] = [];
+  let daemonPeakRssKb = 0;
 
   for (const pid of allPids) {
     const metrics = await collectProcessMetrics(sandbox, pid);
-    if (metrics) {
-      processes.push(metrics);
+    if (!metrics) continue;
+
+    const isBrowser = /chrome|chromium/i.test(metrics.command);
+    if (isBrowser) {
+      browserProcs.push(metrics);
+    } else {
+      daemonProcs.push(metrics);
       const peak = await getPeakRssKb(sandbox, pid);
-      peakRssKb = Math.max(peakRssKb, peak);
+      daemonPeakRssKb = Math.max(daemonPeakRssKb, peak);
     }
   }
 
-  const totalRssKb = processes.reduce((sum, p) => sum + p.rssKb, 0);
-  const totalVszKb = processes.reduce((sum, p) => sum + p.vszKb, 0);
-  const totalCpuTimeSec = processes.reduce((sum, p) => sum + p.cpuTimeSec, 0);
+  const daemonRssKb = daemonProcs.reduce((sum, p) => sum + p.rssKb, 0);
+  const browserRssKb = browserProcs.reduce((sum, p) => sum + p.rssKb, 0);
+  const daemonCpuTimeSec = daemonProcs.reduce((sum, p) => sum + p.cpuTimeSec, 0);
+  const allProcs = [...daemonProcs, ...browserProcs];
+  const totalCpuTimeSec = allProcs.reduce((sum, p) => sum + p.cpuTimeSec, 0);
 
   return {
     coldStartMs,
     binarySizeBytes,
     distributionSizeBytes,
-    daemonProcesses: processes,
-    totalRssKb,
-    totalVszKb,
-    peakRssKb,
+    daemonProcesses: daemonProcs,
+    browserProcesses: browserProcs,
+    daemonRssKb,
+    browserRssKb,
+    daemonPeakRssKb,
+    daemonCpuTimeSec,
     totalCpuTimeSec,
   };
 }
@@ -391,14 +408,20 @@ async function getDistributionSize(
     );
     return (Number(npmPkg) || 0) + (Number(pwBrowser) || 0);
   } else {
-    // Rust binary + Chrome for Testing
+    // Rust binary + Chrome for Testing (checks multiple possible cache paths)
     const binary = await shellSafe(
       sandbox,
       `stat -L -c %s "$(readlink -f "$(which agent-browser)")" 2>/dev/null || echo 0`,
     );
     const chrome = await shellSafe(
       sandbox,
-      `du -sb "$HOME/.cache/agent-browser" 2>/dev/null | awk '{print $1}' || echo 0`,
+      [
+        `size=0`,
+        `for d in "$HOME/.cache/agent-browser" "$HOME/.cache/ms-playwright" "$HOME/.agent-browser/chrome"; do`,
+        `  if [ -d "$d" ]; then size=$(du -sb "$d" 2>/dev/null | awk '{print $1}'); break; fi`,
+        `done`,
+        `echo $size`,
+      ].join("; "),
     );
     return (Number(binary) || 0) + (Number(chrome) || 0);
   }
@@ -518,7 +541,7 @@ async function runScenario(
     return {
       name: scenario.name,
       description: scenario.description,
-      stats: { avgMs: -1, minMs: -1, maxMs: -1, p50Ms: -1, samples: [] },
+      stats: { avgMs: -1, stddevMs: -1, minMs: -1, maxMs: -1, p50Ms: -1, samples: [] },
       error: message,
     };
   }
@@ -569,8 +592,9 @@ async function benchmarkDaemon(
       console.log(`FAILED: ${result.error.slice(0, 120)}`);
     } else {
       const dots = ".".repeat(Math.max(1, 30 - scenario.name.length));
+      const s = result.stats;
       console.log(
-        `${dots} ${result.stats.avgMs}ms avg (p50: ${result.stats.p50Ms}ms, min: ${result.stats.minMs}ms, max: ${result.stats.maxMs}ms)`,
+        `${dots} ${s.avgMs}ms avg +/-${s.stddevMs}ms (p50: ${s.p50Ms}ms, min: ${s.minMs}ms, max: ${s.maxMs}ms)`,
       );
     }
     results.push(result);
@@ -596,12 +620,15 @@ async function benchmarkDaemon(
     console.log(`    ${line}`);
   }
 
-  console.log(`\n  Daemon metrics:`);
-  console.log(`    RSS: ${formatKb(metrics.totalRssKb)} (peak: ${formatKb(metrics.peakRssKb)})`);
-  console.log(`    VSZ: ${formatKb(metrics.totalVszKb)}`);
-  console.log(`    CPU time: ${metrics.totalCpuTimeSec.toFixed(1)}s`);
-  console.log(`    Daemon processes: ${metrics.daemonProcesses.length}`);
+  console.log(`\n  Daemon processes (${metrics.daemonProcesses.length}):`);
+  console.log(`    RSS: ${formatKb(metrics.daemonRssKb)} (peak: ${formatKb(metrics.daemonPeakRssKb)})`);
+  console.log(`    CPU time: ${metrics.daemonCpuTimeSec.toFixed(1)}s`);
   for (const p of metrics.daemonProcesses) {
+    console.log(`      PID ${p.pid}: ${p.command} (RSS: ${formatKb(p.rssKb)}, CPU: ${p.cpuPercent}%)`);
+  }
+  console.log(`  Browser processes (${metrics.browserProcesses.length}):`);
+  console.log(`    RSS: ${formatKb(metrics.browserRssKb)}`);
+  for (const p of metrics.browserProcesses) {
     console.log(`      PID ${p.pid}: ${p.command} (RSS: ${formatKb(p.rssKb)}, CPU: ${p.cpuPercent}%)`);
   }
 
@@ -681,8 +708,8 @@ function printResults(node: DaemonResults, native: DaemonResults) {
   console.log("\n\n========== COMMAND LATENCY ==========\n");
 
   const header =
-    "Scenario".padEnd(20) + "| Node (ms) | Rust (ms) | Speedup";
-  const sep = "-".repeat(20) + "|-----------|-----------|--------";
+    "Scenario".padEnd(20) + "| Node avg +/-sd  | Rust avg +/-sd  | Speedup";
+  const sep = "-".repeat(20) + "|-----------------|-----------------|--------";
   console.log(header);
   console.log(sep);
 
@@ -692,23 +719,19 @@ function printResults(node: DaemonResults, native: DaemonResults) {
     const name = n.name.padEnd(20);
 
     if (n.error || r.error) {
-      const nodeVal = n.error
-        ? "FAILED".padStart(9)
-        : String(n.stats.avgMs).padStart(9);
-      const rustVal = r.error
-        ? "FAILED".padStart(9)
-        : String(r.stats.avgMs).padStart(9);
+      const nodeVal = n.error ? "FAILED".padEnd(15) : `${n.stats.avgMs}ms`.padEnd(15);
+      const rustVal = r.error ? "FAILED".padEnd(15) : `${r.stats.avgMs}ms`.padEnd(15);
       console.log(`${name}| ${nodeVal} | ${rustVal} |    --`);
       continue;
     }
 
-    const nodeMs = String(n.stats.avgMs).padStart(9);
-    const rustMs = String(r.stats.avgMs).padStart(9);
+    const nodeVal = `${n.stats.avgMs} +/-${n.stats.stddevMs}ms`.padEnd(15);
+    const rustVal = `${r.stats.avgMs} +/-${r.stats.stddevMs}ms`.padEnd(15);
     const speedup =
       r.stats.avgMs > 0
         ? (n.stats.avgMs / r.stats.avgMs).toFixed(2) + "x"
         : "--";
-    console.log(`${name}| ${nodeMs} | ${rustMs} | ${speedup.padStart(6)}`);
+    console.log(`${name}| ${nodeVal} | ${rustVal} | ${speedup.padStart(6)}`);
   }
 
   console.log("\n\n========== SYSTEM METRICS ==========\n");
@@ -741,27 +764,39 @@ function printResults(node: DaemonResults, native: DaemonResults) {
       ratio(nm.distributionSizeBytes, rm.distributionSizeBytes),
     ],
     [
-      "Total RSS",
-      formatKb(nm.totalRssKb),
-      formatKb(rm.totalRssKb),
-      ratio(nm.totalRssKb, rm.totalRssKb),
+      "Daemon RSS",
+      formatKb(nm.daemonRssKb),
+      formatKb(rm.daemonRssKb),
+      ratio(nm.daemonRssKb, rm.daemonRssKb),
     ],
     [
-      "Peak RSS",
-      formatKb(nm.peakRssKb),
-      formatKb(rm.peakRssKb),
-      ratio(nm.peakRssKb, rm.peakRssKb),
+      "Daemon peak RSS",
+      formatKb(nm.daemonPeakRssKb),
+      formatKb(rm.daemonPeakRssKb),
+      ratio(nm.daemonPeakRssKb, rm.daemonPeakRssKb),
     ],
     [
-      "CPU time",
-      `${nm.totalCpuTimeSec.toFixed(1)}s`,
-      `${rm.totalCpuTimeSec.toFixed(1)}s`,
-      ratio(nm.totalCpuTimeSec, rm.totalCpuTimeSec),
+      "Browser RSS",
+      formatKb(nm.browserRssKb),
+      formatKb(rm.browserRssKb),
+      ratio(nm.browserRssKb, rm.browserRssKb),
     ],
     [
-      "Processes",
+      "Daemon CPU time",
+      `${nm.daemonCpuTimeSec.toFixed(1)}s`,
+      `${rm.daemonCpuTimeSec.toFixed(1)}s`,
+      ratio(nm.daemonCpuTimeSec, rm.daemonCpuTimeSec),
+    ],
+    [
+      "Daemon processes",
       String(nm.daemonProcesses.length),
       String(rm.daemonProcesses.length),
+      "--",
+    ],
+    [
+      "Browser processes",
+      String(nm.browserProcesses.length),
+      String(rm.browserProcesses.length),
       "--",
     ],
   ];
