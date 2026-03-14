@@ -5405,6 +5405,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_credentials_roundtrip_via_actions() {
+        let _lock = crate::native::auth::AUTH_TEST_MUTEX.lock().unwrap();
+        let key_var = "AGENT_BROWSER_ENCRYPTION_KEY";
+        let original = std::env::var(key_var).ok();
+        // SAFETY: AUTH_TEST_MUTEX serializes all test access so no concurrent mutation.
+        unsafe { std::env::set_var(key_var, "a".repeat(64)) };
+
         let mut state = DaemonState::new();
 
         let set_cmd = json!({
@@ -5437,6 +5443,12 @@ mod tests {
         });
         let result = execute_command(&del_cmd, &mut state).await;
         assert_eq!(result["success"], true);
+
+        // SAFETY: AUTH_TEST_MUTEX serializes all test access so no concurrent mutation.
+        match original {
+            Some(val) => unsafe { std::env::set_var(key_var, val) },
+            None => unsafe { std::env::remove_var(key_var) },
+        }
     }
 
     #[tokio::test]
