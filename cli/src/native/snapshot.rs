@@ -296,8 +296,7 @@ pub async fn take_snapshot(
     let tree_is_empty = trimmed.is_empty();
 
     if options.cursor {
-        let cursor_section =
-            find_cursor_interactive_elements(client, session_id, ref_map, &trimmed).await?;
+        let cursor_section = find_cursor_interactive_elements(client, session_id, ref_map).await?;
         if !cursor_section.is_empty() {
             // v0.19.0 parity: when interactive tree is empty but cursor elements exist,
             // the cursor elements replace the empty message (no separator).
@@ -324,7 +323,6 @@ async fn find_cursor_interactive_elements(
     client: &CdpClient,
     session_id: &str,
     ref_map: &mut RefMap,
-    aria_tree: &str,
 ) -> Result<String, String> {
     // Single JS evaluation that matches the v0.19.0 Node.js findCursorInteractiveElements():
     // - Uses querySelectorAll('*') to walk all elements
@@ -352,6 +350,9 @@ async fn find_cursor_interactive_elements(
     var allElements = document.body.querySelectorAll('*');
     for (var i = 0; i < allElements.length; i++) {
         var el = allElements[i];
+
+        if (el.closest && el.closest('[hidden], [aria-hidden="true"]')) continue;
+
         var tagName = el.tagName.toLowerCase();
         if (interactiveTags[tagName]) continue;
 
@@ -363,11 +364,13 @@ async fn find_cursor_interactive_elements(
         var hasOnClick = el.hasAttribute('onclick') || el.onclick !== null;
         var tabIndex = el.getAttribute('tabindex');
         var hasTabIndex = tabIndex !== null && tabIndex !== '-1';
+        var ce = el.getAttribute('contenteditable');
+        var isEditable = ce === '' || ce === 'true';
 
-        if (!hasCursorPointer && !hasOnClick && !hasTabIndex) continue;
+        if (!hasCursorPointer && !hasOnClick && !hasTabIndex && !isEditable) continue;
 
         // Skip elements that only inherit cursor:pointer from an ancestor
-        if (hasCursorPointer && !hasOnClick && !hasTabIndex) {
+        if (hasCursorPointer && !hasOnClick && !hasTabIndex && !isEditable) {
             var parent = el.parentElement;
             if (parent && getComputedStyle(parent).cursor === 'pointer') continue;
         }
@@ -384,7 +387,8 @@ async fn find_cursor_interactive_elements(
             tagName: tagName,
             hasOnClick: hasOnClick,
             hasCursorPointer: hasCursorPointer,
-            hasTabIndex: hasTabIndex
+            hasTabIndex: hasTabIndex,
+            isEditable: isEditable
         });
     }
     return results;
@@ -413,7 +417,7 @@ async fn find_cursor_interactive_elements(
         return Ok(String::new());
     }
 
-    let mut existing_texts = build_dedup_set(ref_map, aria_tree);
+    let mut existing_texts = build_dedup_set(ref_map);
 
     // Batch-resolve backendNodeIds: use DOM.getDocument to get the root nodeId,
     // then DOM.querySelectorAll to get all tagged elements in a single call.
@@ -488,10 +492,10 @@ async fn find_cursor_interactive_elements(
         }
     }
 
-    // Clean up the data attributes in a single call (fire-and-forget).
+    // Clean up the data attributes we injected for backendNodeId resolution.
     let cleanup_js =
         r#"(function(){ var els = document.querySelectorAll('[data-__ab-ci]'); for (var i = 0; i < els.length; i++) els[i].removeAttribute('data-__ab-ci'); return els.length; })()"#.to_string();
-    let _ = client
+    if let Err(e) = client
         .send_command_typed::<EvaluateParams, EvaluateResult>(
             "Runtime.evaluate",
             &EvaluateParams {
@@ -501,7 +505,10 @@ async fn find_cursor_interactive_elements(
             },
             Some(session_id),
         )
-        .await;
+        .await
+    {
+        eprintln!("[agent-browser] Warning: failed to clean up data-__ab-ci attributes: {e}");
+    }
 
     // Build refs and output lines with v0.19.0-compatible format.
     let mut next_ref = ref_map.next_ref_num();
@@ -538,14 +545,19 @@ async fn find_cursor_interactive_elements(
             .get("hasTabIndex")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
+        let is_editable = elem
+            .get("isEditable")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         let kind = if has_cursor_pointer || has_on_click {
             "clickable"
+        } else if is_editable {
+            "editable"
         } else {
             "focusable"
         };
 
-        // Build hints list matching v0.19.0 format: [cursor:pointer, onclick, tabindex]
         let mut hints: Vec<&str> = Vec::new();
         if has_cursor_pointer {
             hints.push("cursor:pointer");
@@ -555,6 +567,9 @@ async fn find_cursor_interactive_elements(
         }
         if has_tab_index {
             hints.push("tabindex");
+        }
+        if is_editable {
+            hints.push("contenteditable");
         }
 
         let ref_id = format!("e{}", next_ref);
@@ -896,45 +911,16 @@ fn extract_properties(props: &Option<Vec<AXProperty>>) -> NodeProperties {
 
 /// Build the set of texts to de-duplicate cursor-interactive elements against.
 ///
-/// Collects ref-map entry names and quoted strings from ARIA tree lines that
-/// contain `[ref=…]`.  Only ref-bearing lines are scanned because our tree
-/// format quotes *all* text (including StaticText/InlineTextBox), which would
-/// falsely suppress cursor-interactive results.
-fn build_dedup_set(ref_map: &RefMap, aria_tree: &str) -> std::collections::HashSet<String> {
-    let mut texts: std::collections::HashSet<String> = std::collections::HashSet::new();
-
-    // 1. Ref-map entry names
-    for (_, entry) in ref_map.entries_sorted() {
-        if !entry.name.is_empty() {
-            texts.insert(entry.name.to_lowercase());
-        }
-    }
-
-    // 2. Quoted strings from ref-bearing ARIA tree lines
-    for line in aria_tree.lines() {
-        if !line.contains("ref=e") {
-            continue;
-        }
-        let mut pos = 0;
-        while pos < line.len() {
-            if let Some(q_start) = line[pos..].find('"') {
-                let abs_start = pos + q_start + 1;
-                if let Some(q_end) = line[abs_start..].find('"') {
-                    let quoted = &line[abs_start..abs_start + q_end];
-                    if !quoted.is_empty() {
-                        texts.insert(quoted.to_lowercase());
-                    }
-                    pos = abs_start + q_end + 1;
-                } else {
-                    break;
-                }
-            } else {
-                break;
-            }
-        }
-    }
-
-    texts
+/// All ref-bearing ARIA tree nodes have their names stored in `ref_map` during
+/// tree construction, so the ref-map entries are the single source of truth.
+/// This avoids fragile parsing of the rendered tree text.
+fn build_dedup_set(ref_map: &RefMap) -> std::collections::HashSet<String> {
+    ref_map
+        .entries_sorted()
+        .into_iter()
+        .filter(|(_, entry)| !entry.name.is_empty())
+        .map(|(_, entry)| entry.name.to_lowercase())
+        .collect()
 }
 
 /// Recursively collect all `backendNodeId` values from a CDP DOM node tree
@@ -1020,36 +1006,10 @@ mod tests {
         ref_map.add("e1".to_string(), Some(1), "link", "Example Link", None);
         ref_map.add("e2".to_string(), Some(2), "button", "Submit", None);
 
-        let set = build_dedup_set(&ref_map, "");
+        let set = build_dedup_set(&ref_map);
         assert!(set.contains("example link"));
         assert!(set.contains("submit"));
         assert!(!set.contains("other text"));
-    }
-
-    #[test]
-    fn test_dedup_set_extracts_quoted_strings_from_ref_lines_only() {
-        let ref_map = RefMap::new();
-        let tree = concat!(
-            "- heading \"Title\" [level=1, ref=e1]\n",
-            "  - StaticText \"Hidden Text\"\n", // no [ref=], should NOT be extracted
-            "- link \"Click Me\" [ref=e2]\n",
-            "- generic\n",
-            "  - StaticText \"Visible Div\"\n", // no [ref=], should NOT be extracted
-        );
-
-        let set = build_dedup_set(&ref_map, tree);
-        // Quoted strings from ref-bearing lines should be present
-        assert!(set.contains("title"));
-        assert!(set.contains("click me"));
-        // Quoted strings from non-ref lines must NOT be present
-        assert!(
-            !set.contains("hidden text"),
-            "Should not extract from non-ref lines"
-        );
-        assert!(
-            !set.contains("visible div"),
-            "Should not extract from non-ref lines"
-        );
     }
 
     #[test]
@@ -1057,26 +1017,26 @@ mod tests {
         let mut ref_map = RefMap::new();
         ref_map.add("e1".to_string(), Some(1), "button", "Submit Form", None);
 
-        let set = build_dedup_set(&ref_map, "");
+        let set = build_dedup_set(&ref_map);
         assert!(set.contains("submit form"));
-        // The original-case string is NOT stored; we normalize to lowercase
         assert!(!set.contains("Submit Form"));
     }
 
     #[test]
     fn test_dedup_set_empty_inputs() {
         let ref_map = RefMap::new();
-        let set = build_dedup_set(&ref_map, "");
+        let set = build_dedup_set(&ref_map);
         assert!(set.is_empty());
     }
 
     #[test]
-    fn test_dedup_set_ref_with_multiple_quoted_parts() {
-        let ref_map = RefMap::new();
-        // A ref line with role and name both quoted
-        let tree = "- button \"OK\" [ref=e1, label=\"Confirm\"]\n";
-        let set = build_dedup_set(&ref_map, tree);
+    fn test_dedup_set_skips_empty_names() {
+        let mut ref_map = RefMap::new();
+        ref_map.add("e1".to_string(), Some(1), "generic", "", None);
+        ref_map.add("e2".to_string(), Some(2), "button", "OK", None);
+
+        let set = build_dedup_set(&ref_map);
+        assert_eq!(set.len(), 1);
         assert!(set.contains("ok"));
-        assert!(set.contains("confirm"));
     }
 }
