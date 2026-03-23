@@ -3065,27 +3065,28 @@ async fn handle_download(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
 
         match tokio::time::timeout(remaining, rx.recv()).await {
             Ok(Ok(event)) => {
+                let is_this_session = event.session_id.as_deref() == Some(&session_id);
                 // Capture the GUID from downloadWillBegin
-                if event.method == "Browser.downloadWillBegin"
-                    && event.session_id.as_deref() == Some(&session_id)
+                if is_this_session
+                    && (event.method == "Browser.downloadWillBegin"
+                        || event.method == "Page.downloadWillBegin")
                 {
                     if let Some(guid) = event.params.get("guid").and_then(|v| v.as_str()) {
                         downloaded_guid = Some(guid.to_string());
                     }
                 }
-                // Check for download completion
-                if event.method == "Browser.downloadProgress"
-                    && event.session_id.as_deref() == Some(&session_id)
-                    && event.params.get("state").and_then(|v| v.as_str()) == Some("completed")
+                // Check for download completion or cancellation
+                if is_this_session
+                    && (event.method == "Browser.downloadProgress"
+                        || event.method == "Page.downloadProgress")
                 {
-                    break;
-                }
-                // Also check Page.downloadProgress for older Chrome versions
-                if event.method == "Page.downloadProgress"
-                    && event.session_id.as_deref() == Some(&session_id)
-                    && event.params.get("state").and_then(|v| v.as_str()) == Some("completed")
-                {
-                    break;
+                    match event.params.get("state").and_then(|v| v.as_str()) {
+                        Some("completed") => break,
+                        Some("canceled") => {
+                            return Err("Download was canceled".to_string());
+                        }
+                        _ => {}
+                    }
                 }
             }
             Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
