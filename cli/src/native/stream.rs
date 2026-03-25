@@ -49,6 +49,7 @@ pub struct StreamServer {
     viewport_width: Arc<Mutex<u32>>,
     viewport_height: Arc<Mutex<u32>>,
     dashboard_dir: Option<PathBuf>,
+    last_tabs: Arc<RwLock<Vec<Value>>>,
 }
 
 impl StreamServer {
@@ -118,9 +119,13 @@ impl StreamServer {
         _session_id: String,
     ) -> Result<(Self, Arc<RwLock<Option<Arc<CdpClient>>>>), String> {
         let addr = format!("127.0.0.1:{}", preferred_port);
-        let listener = TcpListener::bind(&addr)
-            .await
-            .map_err(|e| format!("Failed to bind stream server: {}", e))?;
+        let listener = match TcpListener::bind(&addr).await {
+            Ok(l) => l,
+            Err(_) if preferred_port != 0 => TcpListener::bind("127.0.0.1:0")
+                .await
+                .map_err(|e| format!("Failed to bind stream server: {}", e))?,
+            Err(e) => return Err(format!("Failed to bind stream server: {}", e)),
+        };
 
         let actual_addr = listener
             .local_addr()
@@ -136,6 +141,7 @@ impl StreamServer {
         let cdp_session_id = Arc::new(RwLock::new(None::<String>));
         let viewport_width = Arc::new(Mutex::new(1280u32));
         let viewport_height = Arc::new(Mutex::new(720u32));
+        let last_tabs = Arc::new(RwLock::new(Vec::<Value>::new()));
 
         let frame_tx_clone = frame_tx.clone();
         let client_count_clone = client_count.clone();
@@ -147,6 +153,7 @@ impl StreamServer {
         let vw_clone = viewport_width.clone();
         let vh_clone = viewport_height.clone();
         let dashboard_dir_clone = dashboard_dir.clone();
+        let last_tabs_clone = last_tabs.clone();
         tokio::spawn(async move {
             accept_loop(
                 listener,
@@ -159,6 +166,7 @@ impl StreamServer {
                 vw_clone,
                 vh_clone,
                 dashboard_dir_clone,
+                last_tabs_clone,
             )
             .await;
         });
@@ -198,6 +206,7 @@ impl StreamServer {
                 viewport_width,
                 viewport_height,
                 dashboard_dir,
+                last_tabs,
             },
             client_slot,
         ))
@@ -301,6 +310,21 @@ impl StreamServer {
         let _ = self.frame_tx.send(msg.to_string());
     }
 
+    /// Broadcast the current tab list so the dashboard can render a tab bar.
+    /// Also caches the list so newly connected WebSocket clients receive it immediately.
+    pub fn broadcast_tabs(&self, tabs: &[Value]) {
+        {
+            let mut guard = self.last_tabs.blocking_write();
+            *guard = tabs.to_vec();
+        }
+        let msg = json!({
+            "type": "tabs",
+            "tabs": tabs,
+            "timestamp": timestamp_ms(),
+        });
+        let _ = self.frame_tx.send(msg.to_string());
+    }
+
     /// Whether the dashboard directory is available.
     pub fn has_dashboard(&self) -> bool {
         self.dashboard_dir.is_some()
@@ -319,6 +343,7 @@ async fn accept_loop(
     viewport_width: Arc<Mutex<u32>>,
     viewport_height: Arc<Mutex<u32>>,
     dashboard_dir: Option<PathBuf>,
+    last_tabs: Arc<RwLock<Vec<Value>>>,
 ) {
     let dashboard_dir = dashboard_dir.map(Arc::from);
     while let Ok((stream, addr)) = listener.accept().await {
@@ -331,6 +356,7 @@ async fn accept_loop(
         let vw = viewport_width.clone();
         let vh = viewport_height.clone();
         let dd = dashboard_dir.clone();
+        let lt = last_tabs.clone();
 
         tokio::spawn(async move {
             handle_connection(
@@ -345,6 +371,7 @@ async fn accept_loop(
                 vw,
                 vh,
                 dd,
+                lt,
             )
             .await;
         });
@@ -365,6 +392,7 @@ async fn handle_connection(
     viewport_width: Arc<Mutex<u32>>,
     viewport_height: Arc<Mutex<u32>>,
     dashboard_dir: Option<Arc<PathBuf>>,
+    last_tabs: Arc<RwLock<Vec<Value>>>,
 ) {
     let mut buf = [0u8; 4096];
     let n = match stream.peek(&mut buf).await {
@@ -386,6 +414,7 @@ async fn handle_connection(
             cdp_session_id,
             viewport_width,
             viewport_height,
+            last_tabs,
         )
         .await;
     } else {
@@ -410,6 +439,7 @@ async fn handle_ws_client(
     cdp_session_id: Arc<RwLock<Option<String>>>,
     viewport_width: Arc<Mutex<u32>>,
     viewport_height: Arc<Mutex<u32>>,
+    last_tabs: Arc<RwLock<Vec<Value>>>,
 ) {
     let callback =
         |req: &tokio_tungstenite::tungstenite::handshake::server::Request,
@@ -457,6 +487,16 @@ async fn handle_ws_client(
             "viewportHeight": vh,
         });
         let _ = ws_tx.send(Message::Text(status.to_string())).await;
+
+        let tabs = last_tabs.read().await;
+        if !tabs.is_empty() {
+            let tabs_msg = json!({
+                "type": "tabs",
+                "tabs": *tabs,
+                "timestamp": timestamp_ms(),
+            });
+            let _ = ws_tx.send(Message::Text(tabs_msg.to_string())).await;
+        }
     }
 
     // Notify the CDP event loop that a client connected (may trigger auto-start screencast)
@@ -607,12 +647,11 @@ async fn cdp_event_loop(
                                 Err(broadcast::error::RecvError::Closed) => break,
                             }
                         }
-                        // Also check for notify (client count change or CDP client change)
+                        // Also check for notify (client count change, CDP client change, or session switch)
                         _ = client_notify.notified() => {
                             let count = *client_count.lock().await;
-                            let session_id = cdp_session_id.read().await.clone();
+                            let new_session_id = cdp_session_id.read().await.clone();
                             if count == 0 {
-                                // All WS clients gone — stop screencast
                                 let _ = client_arc
                                     .send_command_no_params("Page.stopScreencast", session_id.as_deref())
                                     .await;
@@ -620,7 +659,6 @@ async fn cdp_event_loop(
                                 *sc = false;
                                 break;
                             }
-                            // Check if CDP client changed (browser closed/relaunched)
                             let client_changed = {
                                 let guard = client_slot.read().await;
                                 let same = guard
@@ -628,14 +666,14 @@ async fn cdp_event_loop(
                                     .is_some_and(|c| Arc::ptr_eq(c, &client_arc));
                                 !same
                             };
-                            if client_changed {
-                                // CDP client changed — stop our screencast and restart loop
+                            let session_changed = new_session_id != session_id;
+                            if client_changed || session_changed {
+                                // Stop screencast on old session, restart loop to pick up new one
                                 let _ = client_arc
                                     .send_command_no_params("Page.stopScreencast", session_id.as_deref())
                                     .await;
                                 let mut sc = screencasting.lock().await;
                                 *sc = false;
-                                // Re-notify so we pick up the new client in the outer loop
                                 client_notify.notify_one();
                                 break;
                             }
@@ -743,13 +781,21 @@ async fn handle_http_request(
         .and_then(|line| line.split_whitespace().nth(1))
         .unwrap_or("/");
 
-    let (status, content_type, body) = match dashboard_dir {
-        Some(dir) => serve_static_file(dir, path),
-        None => (
+    let (status, content_type, body) = if path == "/api/sessions" {
+        (
             "200 OK",
-            "text/html; charset=utf-8",
-            DASHBOARD_NOT_INSTALLED_HTML.to_string(),
-        ),
+            "application/json; charset=utf-8",
+            discover_sessions(),
+        )
+    } else {
+        match dashboard_dir {
+            Some(dir) => serve_static_file(dir, path),
+            None => (
+                "200 OK",
+                "text/html; charset=utf-8",
+                DASHBOARD_NOT_INSTALLED_HTML.to_string(),
+            ),
+        }
     };
 
     let response = format!(
@@ -815,6 +861,76 @@ code { background: #262626; padding: 2px 8px; border-radius: 4px; font-size: 14p
 </div>
 </body>
 </html>"#;
+
+/// Resolve the socket directory where `.stream` files live.
+fn get_socket_dir() -> PathBuf {
+    if let Ok(dir) = std::env::var("AGENT_BROWSER_SOCKET_DIR") {
+        if !dir.is_empty() {
+            return PathBuf::from(dir);
+        }
+    }
+    if let Ok(xdg) = std::env::var("XDG_RUNTIME_DIR") {
+        if !xdg.is_empty() {
+            return PathBuf::from(xdg).join("agent-browser");
+        }
+    }
+    if let Some(home) = dirs::home_dir() {
+        return home.join(".agent-browser");
+    }
+    std::env::temp_dir().join("agent-browser")
+}
+
+/// Discover all active streaming sessions by reading `*.stream` files.
+/// Stale entries (dead process) are removed on the fly.
+fn discover_sessions() -> String {
+    let dir = get_socket_dir();
+    let mut sessions = Vec::new();
+
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if let Some(session) = name_str.strip_suffix(".stream") {
+                if let Ok(port_str) = std::fs::read_to_string(entry.path()) {
+                    if let Ok(port) = port_str.trim().parse::<u16>() {
+                        let pid_path = dir.join(format!("{}.pid", session));
+                        if is_process_alive(&pid_path) {
+                            sessions.push(json!({
+                                "session": session,
+                                "port": port,
+                            }));
+                        } else {
+                            let _ = std::fs::remove_file(entry.path());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    serde_json::to_string(&sessions).unwrap_or_else(|_| "[]".to_string())
+}
+
+fn is_process_alive(pid_path: &Path) -> bool {
+    let pid_str = match std::fs::read_to_string(pid_path) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    let pid: u32 = match pid_str.trim().parse() {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
+    #[cfg(unix)]
+    {
+        unsafe { libc::kill(pid as i32, 0) == 0 }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        // On non-Unix, just check if the pid file exists
+        true
+    }
+}
 
 /// Public accessor for the dashboard installation directory.
 pub fn get_dashboard_dir() -> PathBuf {

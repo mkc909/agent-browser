@@ -21,35 +21,30 @@ export function Viewport({
   const containerRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
 
-  const drawFrame = useCallback(
-    (base64: string) => {
-      const canvas = canvasRef.current;
-      if (!canvas) return;
+  const drawFrame = useCallback((base64: string) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
 
-      if (!imgRef.current) {
-        imgRef.current = new Image();
+    if (!imgRef.current) {
+      imgRef.current = new Image();
+    }
+    const img = imgRef.current;
+    img.onload = () => {
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      const ctx = canvas.getContext("2d");
+      if (ctx) {
+        ctx.drawImage(img, 0, 0);
       }
-      const img = imgRef.current;
-      img.onload = () => {
-        canvas.width = img.naturalWidth;
-        canvas.height = img.naturalHeight;
-        const ctx = canvas.getContext("2d");
-        if (ctx) {
-          ctx.drawImage(img, 0, 0);
-        }
-      };
-      img.src = `data:image/jpeg;base64,${base64}`;
-    },
-    [],
-  );
+    };
+    img.src = `data:image/jpeg;base64,${base64}`;
+  }, []);
 
   useEffect(() => {
     if (frame) {
       drawFrame(frame);
     }
   }, [frame, drawFrame]);
-
-  const aspectRatio = viewportWidth / viewportHeight;
 
   return (
     <div ref={containerRef} className="flex flex-col h-full">
@@ -73,11 +68,12 @@ export function Viewport({
 
       <div className="flex-1 flex items-center justify-center p-2 min-h-0">
         {frame ? (
-          <canvas
-            ref={canvasRef}
-            className="max-w-full max-h-full rounded"
-            style={{ aspectRatio }}
-          />
+          <div
+            className="max-w-full max-h-full"
+            style={{ aspectRatio: `${viewportWidth} / ${viewportHeight}` }}
+          >
+            <canvas ref={canvasRef} className="w-full h-full rounded" />
+          </div>
         ) : (
           <div className="text-[var(--text-muted)] text-sm text-center">
             {browserConnected

@@ -408,6 +408,11 @@ impl DaemonState {
             let sc = server.is_screencasting().await;
             let (vw, vh) = server.viewport().await;
             server.broadcast_status(connected, sc, vw, vh);
+            if let Some(ref mgr) = self.browser {
+                server.broadcast_tabs(&mgr.tab_list());
+            } else {
+                server.broadcast_tabs(&[]);
+            }
             // Notify the background CDP event loop that the client changed
             server.notify_client_changed();
         }
@@ -1226,6 +1231,21 @@ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
             .is_some_and(|s| s == "success");
         let data = resp.get("data").cloned().unwrap_or(Value::Null);
         server.broadcast_result(&id, action, success, &data, duration_ms);
+
+        if let Some(ref mgr) = state.browser {
+            server.broadcast_tabs(&mgr.tab_list());
+
+            // Keep the stream server's CDP session in sync with the active tab
+            // so screencasting always targets the correct page.
+            if matches!(
+                action,
+                "tab_new" | "tab_switch" | "tab_close" | "open" | "navigate"
+            ) {
+                let session_id = mgr.active_session_id().ok().map(|s| s.to_string());
+                server.set_cdp_session_id(session_id).await;
+                server.notify_client_changed();
+            }
+        }
     }
 
     resp

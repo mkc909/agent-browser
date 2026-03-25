@@ -54,13 +54,28 @@ export interface ErrorMessage {
   message: string;
 }
 
+export interface TabInfo {
+  index: number;
+  title: string;
+  url: string;
+  type: string;
+  active: boolean;
+}
+
+export interface TabsMessage {
+  type: "tabs";
+  tabs: TabInfo[];
+  timestamp: number;
+}
+
 export type StreamMessage =
   | FrameMessage
   | StatusMessage
   | CommandMessage
   | ResultMessage
   | ConsoleMessage
-  | ErrorMessage;
+  | ErrorMessage
+  | TabsMessage;
 
 export type ActivityEvent = CommandMessage | ResultMessage | ConsoleMessage;
 
@@ -72,6 +87,7 @@ export interface StreamState {
   viewportHeight: number;
   currentFrame: string | null;
   events: ActivityEvent[];
+  tabs: TabInfo[];
 }
 
 const MAX_EVENTS = 500;
@@ -85,11 +101,31 @@ export function useStreamConnection(port: number = 9223) {
     viewportHeight: 720,
     currentFrame: null,
     events: [],
+    tabs: [],
   });
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const eventsRef = useRef<ActivityEvent[]>([]);
+
+  const portRef = useRef(port);
+
+  useEffect(() => {
+    if (portRef.current !== port) {
+      portRef.current = port;
+      eventsRef.current = [];
+      setState({
+        connected: false,
+        browserConnected: false,
+        screencasting: false,
+        viewportWidth: 1280,
+        viewportHeight: 720,
+        currentFrame: null,
+        events: [],
+        tabs: [],
+      });
+    }
+  }, [port]);
 
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
@@ -147,6 +183,13 @@ export function useStreamConnection(port: number = 9223) {
           }));
           break;
         }
+
+        case "tabs":
+          setState((prev) => ({
+            ...prev,
+            tabs: msg.tabs,
+          }));
+          break;
 
         case "error":
           break;

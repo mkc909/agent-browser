@@ -92,7 +92,7 @@ pub async fn run_daemon(session: &str) {
 #[cfg(unix)]
 async fn run_socket_server(
     socket_path: &PathBuf,
-    _session: &str,
+    session: &str,
     stream_client: Option<Arc<RwLock<Option<Arc<CdpClient>>>>>,
     stream_server: Option<Arc<StreamServer>>,
     idle_timeout_ms: Option<u64>,
@@ -101,6 +101,13 @@ async fn run_socket_server(
 
     let listener =
         UnixListener::bind(socket_path).map_err(|e| format!("Failed to bind socket: {}", e))?;
+
+    let stream_file: Option<PathBuf> = if stream_server.is_some() {
+        let dir = socket_path.parent().unwrap_or(std::path::Path::new("."));
+        Some(dir.join(format!("{}.stream", session)))
+    } else {
+        None
+    };
 
     let state: std::sync::Arc<tokio::sync::Mutex<DaemonState>> = std::sync::Arc::new(
         tokio::sync::Mutex::new(DaemonState::new_with_stream(stream_client, stream_server)),
@@ -119,8 +126,9 @@ async fn run_socket_server(
                     Ok((stream, _)) => {
                         let state = state.clone();
                         let reset_tx = reset_tx.clone();
+                        let sf = stream_file.clone();
                         tokio::spawn(async move {
-                            handle_connection(stream, state, reset_tx).await;
+                            handle_connection(stream, state, reset_tx, sf).await;
                         });
                     }
                     Err(e) => {
@@ -176,6 +184,12 @@ async fn run_socket_server(
     let port_path = socket_dir.join(format!("{}.port", session));
     let _ = fs::write(&port_path, port.to_string());
 
+    let stream_file: Option<PathBuf> = if stream_server.is_some() {
+        Some(socket_dir.join(format!("{}.stream", session)))
+    } else {
+        None
+    };
+
     let state: std::sync::Arc<tokio::sync::Mutex<DaemonState>> = std::sync::Arc::new(
         tokio::sync::Mutex::new(DaemonState::new_with_stream(stream_client, stream_server)),
     );
@@ -193,8 +207,9 @@ async fn run_socket_server(
                     Ok((stream, _)) => {
                         let state = state.clone();
                         let reset_tx = reset_tx.clone();
+                        let sf = stream_file.clone();
                         tokio::spawn(async move {
-                            handle_connection(stream, state, reset_tx).await;
+                            handle_connection(stream, state, reset_tx, sf).await;
                         });
                     }
                     Err(e) => {
@@ -237,6 +252,7 @@ async fn handle_connection<S>(
     stream: S,
     state: std::sync::Arc<tokio::sync::Mutex<DaemonState>>,
     idle_reset_tx: Option<Arc<mpsc::Sender<()>>>,
+    stream_file_cleanup: Option<PathBuf>,
 ) where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
@@ -290,6 +306,9 @@ async fn handle_connection<S>(
                 }
 
                 if is_close {
+                    if let Some(ref path) = stream_file_cleanup {
+                        let _ = fs::remove_file(path);
+                    }
                     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                     process::exit(0);
                 }
