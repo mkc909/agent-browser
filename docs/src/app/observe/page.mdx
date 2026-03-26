@@ -14,27 +14,31 @@ This downloads the dashboard to `~/.agent-browser/dashboard/` and is served dire
 
 ## Usage
 
-Add `--observe` to any command to enable the dashboard:
+Start the dashboard server and open any session -- it appears automatically:
 
 ```bash
-agent-browser --observe open example.com
+agent-browser dashboard start
+agent-browser open example.com
 ```
 
-Then open `http://localhost:9223` in your browser to see the live dashboard.
+Then open `http://localhost:4848` in your browser to see the live dashboard.
 
-### Custom port
+All sessions automatically stream to the dashboard. No extra flags are needed.
 
-```bash
-agent-browser --observe 9224 open example.com
-# Dashboard at http://localhost:9224
-```
+### Custom stream port
 
-### Environment variable
-
-You can also use the `AGENT_BROWSER_STREAM_PORT` environment variable directly:
+By default each session binds its WebSocket stream server to an OS-assigned port. To use a specific port, set the `AGENT_BROWSER_STREAM_PORT` environment variable:
 
 ```bash
 AGENT_BROWSER_STREAM_PORT=9223 agent-browser open example.com
+```
+
+You can also use the runtime commands to control streaming on a running session:
+
+```bash
+agent-browser stream enable --port 9223
+agent-browser stream status
+agent-browser stream disable
 ```
 
 ## Dashboard features

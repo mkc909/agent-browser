@@ -76,8 +76,8 @@ impl StreamServer {
     /// Returns the server and a shared slot to set the client when the browser launches.
     /// Input messages are ignored until the client is set.
     /// When `allow_port_fallback` is true, binding to an occupied port falls back to an
-    /// OS-assigned port (used by daemon startup with `--observe`). When false, the error
-    /// propagates (used by the runtime `stream_enable` command).
+    /// OS-assigned port (used by daemon startup). When false, the error propagates
+    /// (used by the runtime `stream_enable` command).
     pub async fn start_without_client(
         preferred_port: u16,
         session_id: String,
@@ -1605,12 +1605,6 @@ async fn exec_cli(body: &str) -> Result<String, String> {
         return Err("Empty args array".to_string());
     }
 
-    // Only enable streaming for session-creating commands (open) so the new
-    // daemon starts a stream server. For all other commands (eval, navigate,
-    // tab-switch, etc.) we must NOT set this — it triggers the --observe
-    // restart logic in main.rs which can hang or kill the running daemon.
-    let is_open = args.iter().any(|a| a == "open");
-
     let exe = std::env::current_exe()
         .map_err(|e| format!("Cannot resolve executable: {}", e))?;
 
@@ -1618,13 +1612,8 @@ async fn exec_cli(body: &str) -> Result<String, String> {
     cmd.args(&args)
         .arg("--json")
         .env_remove("AGENT_BROWSER_DASHBOARD")
-        .env_remove("AGENT_BROWSER_DASHBOARD_PORT");
-
-    if is_open {
-        cmd.env("AGENT_BROWSER_STREAM_PORT", "0");
-    } else {
-        cmd.env_remove("AGENT_BROWSER_STREAM_PORT");
-    }
+        .env_remove("AGENT_BROWSER_DASHBOARD_PORT")
+        .env_remove("AGENT_BROWSER_STREAM_PORT");
 
     let output = cmd
         .output()
@@ -1706,9 +1695,6 @@ async fn spawn_session(body: &str) -> Result<String, String> {
         .arg("about:blank")
         .arg("--session")
         .arg(session);
-
-    // Enable streaming so the session is discoverable by the dashboard
-    cmd.env("AGENT_BROWSER_STREAM_PORT", "0");
 
     cmd.stdout(std::process::Stdio::null());
     cmd.stderr(std::process::Stdio::null());

@@ -21,7 +21,7 @@ use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
 
 use commands::{gen_id, parse_command, ParseError};
-use connection::{daemon_ready, ensure_daemon, get_socket_dir, send_command, DaemonOptions};
+use connection::{ensure_daemon, get_socket_dir, send_command, DaemonOptions};
 use flags::{clean_args, parse_flags, Flags};
 use install::run_install;
 use output::{
@@ -677,11 +677,6 @@ fn main() {
         return;
     }
 
-    // Set stream port env var when --observe is used so the daemon enables streaming.
-    if let Some(port) = flags.observe {
-        env::set_var("AGENT_BROWSER_STREAM_PORT", port.to_string());
-    }
-
     // Parse proxy URL to separate server from credentials for the daemon.
     let (proxy_server, proxy_username, proxy_password) = if let Some(ref proxy_str) = flags.proxy {
         let parsed = parse_proxy(proxy_str);
@@ -717,19 +712,6 @@ fn main() {
         cdp: flags.cdp.as_deref(),
     };
 
-    // If --observe was requested but the daemon is already running without streaming,
-    // restart it so the stream server is enabled.
-    if flags.observe.is_some() {
-        let stream_file = get_socket_dir().join(format!("{}.stream", flags.session));
-        if daemon_ready(&flags.session) && !stream_file.exists() {
-            let _ = send_command(
-                serde_json::json!({"action": "close", "id": "observe-restart"}),
-                &flags.session,
-            );
-            std::thread::sleep(std::time::Duration::from_millis(300));
-        }
-    }
-
     let daemon_result = match ensure_daemon(&flags.session, &daemon_opts) {
         Ok(result) => result,
         Err(e) => {
@@ -741,24 +723,6 @@ fn main() {
             exit(1);
         }
     };
-
-    if flags.observe.is_some() {
-        if !flags.json {
-            let stream_file = get_socket_dir().join(format!("{}.stream", flags.session));
-            let mut actual_port = None;
-            for _ in 0..20 {
-                if let Ok(s) = fs::read_to_string(&stream_file) {
-                    if let Ok(p) = s.trim().parse::<u16>() {
-                        actual_port = Some(p);
-                        break;
-                    }
-                }
-                std::thread::sleep(std::time::Duration::from_millis(100));
-            }
-            let port = actual_port.unwrap_or_else(|| flags.observe.unwrap_or(9223));
-            eprintln!("-> Observing at http://localhost:{}", port);
-        }
-    }
 
     // Warn if launch-time options were explicitly passed via CLI but daemon was already running
     // Only warn about flags that were passed on the command line, not those set via environment

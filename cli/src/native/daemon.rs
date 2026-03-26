@@ -46,23 +46,20 @@ pub async fn run_daemon(session: &str) {
 
     let mut stream_client: Option<Arc<RwLock<Option<Arc<CdpClient>>>>> = None;
     let mut stream_server_instance: Option<Arc<StreamServer>> = None;
-    if let Ok(port_str) = env::var("AGENT_BROWSER_STREAM_PORT") {
-        if let Ok(port) = port_str.parse::<u16>() {
-            {
-                match StreamServer::start_without_client(port, session.to_string(), true).await {
-                    Ok((stream_server, client_slot)) => {
-                        stream_client = Some(client_slot.clone());
-                        if let Err(e) = fs::write(&stream_path, stream_server.port().to_string()) {
-                            let _ =
-                                writeln!(std::io::stderr(), "Failed to write .stream file: {}", e);
-                        }
-                        stream_server_instance = Some(Arc::new(stream_server));
-                    }
-                    Err(e) => {
-                        let _ = writeln!(std::io::stderr(), "Stream server failed to start: {}", e);
-                    }
-                }
+    let preferred_port = env::var("AGENT_BROWSER_STREAM_PORT")
+        .ok()
+        .and_then(|s| s.parse::<u16>().ok())
+        .unwrap_or(0);
+    match StreamServer::start_without_client(preferred_port, session.to_string(), true).await {
+        Ok((stream_server, client_slot)) => {
+            stream_client = Some(client_slot.clone());
+            if let Err(e) = fs::write(&stream_path, stream_server.port().to_string()) {
+                let _ = writeln!(std::io::stderr(), "Failed to write .stream file: {}", e);
             }
+            stream_server_instance = Some(Arc::new(stream_server));
+        }
+        Err(e) => {
+            let _ = writeln!(std::io::stderr(), "Stream server failed to start: {}", e);
         }
     }
 

@@ -2410,8 +2410,7 @@ Subcommands:
 Running 'agent-browser dashboard' with no subcommand is equivalent to 'dashboard start'.
 
 The dashboard runs as a standalone background process, independent of
-browser sessions. Sessions must be started with --observe to enable
-streaming to the dashboard.
+browser sessions. All sessions automatically stream to the dashboard.
 
 Options:
   --port <n>           Port for the dashboard server (default: 4848)
@@ -2424,7 +2423,6 @@ Examples:
   agent-browser dashboard start
   agent-browser dashboard start --port 8080
   agent-browser dashboard stop
-  agent-browser --observe open example.com
 "##
         }
 
@@ -2486,8 +2484,8 @@ Notes:
   - 'stream enable' creates the WebSocket server.
   - WebSocket clients trigger frame streaming automatically.
   - 'screencast_start' and 'screencast_stop' still control explicit CDP screencasts.
-  - AGENT_BROWSER_STREAM_PORT only affects daemon startup; use 'stream enable'
-    for sessions that are already running.
+  - Streaming is always enabled. Set AGENT_BROWSER_STREAM_PORT to bind to a
+    specific port instead of the default OS-assigned port.
 
 Global Options:
   --json               Output as JSON
@@ -2828,7 +2826,6 @@ Options:
   --confirm-actions <list>   Categories requiring confirmation (or AGENT_BROWSER_CONFIRM_ACTIONS)
   --confirm-interactive      Interactive confirmation prompts; auto-denies if stdin is not a TTY (or AGENT_BROWSER_CONFIRM_INTERACTIVE)
   --engine <name>            Browser engine: chrome (default), lightpanda (or AGENT_BROWSER_ENGINE)
-  --observe [port]           Enable observability dashboard (default port: 9223)
   --config <path>            Use a custom config file (or AGENT_BROWSER_CONFIG env)
   --debug                    Debug output
   --version, -V              Show version
@@ -2874,7 +2871,7 @@ Environment:
   AGENT_BROWSER_SESSION_NAME     Auto-save/load state persistence name
   AGENT_BROWSER_STATE_EXPIRE_DAYS Auto-delete saved states older than N days (default: 30)
   AGENT_BROWSER_ENCRYPTION_KEY   64-char hex key for AES-256-GCM session encryption
-  AGENT_BROWSER_STREAM_PORT      Enable WebSocket streaming on port (e.g., 9223)
+  AGENT_BROWSER_STREAM_PORT      Override WebSocket streaming port (default: OS-assigned)
   AGENT_BROWSER_IDLE_TIMEOUT_MS  Auto-shutdown daemon after N ms of inactivity (disabled by default)
   AGENT_BROWSER_IOS_DEVICE       Default iOS device name
   AGENT_BROWSER_IOS_UDID         Default iOS device UDID
@@ -2915,7 +2912,6 @@ Examples:
   agent-browser --color-scheme dark open example.com  # Dark mode
   agent-browser --profile ~/.myapp open example.com    # Persistent profile
   agent-browser --session-name myapp open example.com  # Auto-save/restore state
-  agent-browser --observe open example.com             # Live dashboard at localhost:9223
 
 Command Chaining:
   Chain commands with && in a single shell call (browser persists via daemon):

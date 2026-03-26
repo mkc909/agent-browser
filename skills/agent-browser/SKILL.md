@@ -199,11 +199,9 @@ agent-browser diff url <url1> <url2> --wait-until networkidle  # Custom wait str
 agent-browser diff url <url1> <url2> --selector "#main"  # Scope to element
 ```
 
-## Runtime Streaming
+## Streaming
 
-Use `agent-browser stream enable` when you need a live WebSocket preview for an already-running session. This is the preferred runtime path because it does not require restarting the daemon. `stream enable` creates the server, `stream status` reports the bound port and connection state, and `stream disable` tears it down cleanly.
-
-If streaming must be present from the first daemon command, `AGENT_BROWSER_STREAM_PORT` still works at daemon startup, but that environment variable is not retroactive for sessions that are already running.
+Every session automatically starts a WebSocket stream server on an OS-assigned port. Use `agent-browser stream status` to see the bound port and connection state. Use `stream disable` to tear it down, and `stream enable --port <port>` to re-enable on a specific port.
 
 ## Batch Execution
 
@@ -725,14 +723,14 @@ agent-browser dashboard install
 # Start the dashboard server (background, port 4848)
 agent-browser dashboard start
 
-# Start sessions with --observe to stream to the dashboard
-agent-browser --observe open example.com
+# All sessions are automatically visible in the dashboard
+agent-browser open example.com
 
 # Stop the dashboard
 agent-browser dashboard stop
 ```
 
-The dashboard runs independently of browser sessions on port 4848 (configurable with `--port`). Sessions must use `--observe` to enable WebSocket streaming.
+The dashboard runs independently of browser sessions on port 4848 (configurable with `--port`). All sessions automatically stream to the dashboard.
 
 ## Ready-to-Use Templates
 
