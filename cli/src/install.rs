@@ -655,14 +655,6 @@ pub fn get_dashboard_dir() -> PathBuf {
         .join("dashboard")
 }
 
-pub fn find_installed_dashboard() -> Option<PathBuf> {
-    let dir = get_dashboard_dir();
-    if dir.join("index.html").exists() {
-        Some(dir)
-    } else {
-        None
-    }
-}
 
 const DASHBOARD_VERSION: &str = env!("CARGO_PKG_VERSION");
 
