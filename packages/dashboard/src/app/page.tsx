@@ -93,7 +93,7 @@ export default function DashboardPage() {
         return next.size === prev.size ? prev : next;
       });
     }
-  }, [polledSessions, pendingSessions.length, closingSessions.size]);
+  }, [polledSessions, pendingSessions, closingSessions]);
 
   const sessions = useMemo(() => {
     const polledNames = new Set(polledSessions.map((s) => s.session));

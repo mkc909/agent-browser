@@ -10,6 +10,8 @@ use tokio::sync::{broadcast, watch, Mutex, Notify, RwLock};
 use tokio_tungstenite::tungstenite::Message;
 
 use super::cdp::client::CdpClient;
+use crate::connection::get_socket_dir;
+use crate::install::get_dashboard_dir;
 
 /// Frame metadata from CDP Page.screencastFrame events.
 #[derive(Debug, Clone)]
@@ -503,6 +505,17 @@ async fn accept_loop(
     }
 }
 
+fn is_websocket_upgrade(request: &str) -> bool {
+    request.lines().any(|line| {
+        if let Some((name, value)) = line.split_once(':') {
+            name.trim().eq_ignore_ascii_case("upgrade")
+                && value.trim().eq_ignore_ascii_case("websocket")
+        } else {
+            false
+        }
+    })
+}
+
 /// Peek at the TCP stream to dispatch between WebSocket upgrade and plain HTTP.
 #[allow(clippy::too_many_arguments)]
 async fn handle_connection(
@@ -531,7 +544,7 @@ async fn handle_connection(
     };
     let request = String::from_utf8_lossy(&buf[..n]);
 
-    if request.contains("Upgrade: websocket") || request.contains("upgrade: websocket") {
+    if is_websocket_upgrade(&request) {
         let frame_rx = frame_tx.subscribe();
         handle_ws_client(
             stream,
@@ -555,6 +568,7 @@ async fn handle_connection(
         handle_http_request(
             stream,
             &request,
+            n,
             dashboard_dir.as_deref().map(|p| p.as_path()),
             &last_tabs,
             &last_engine,
@@ -1039,14 +1053,13 @@ const CORS_HEADERS: &str = "Access-Control-Allow-Origin: *\r\nAccess-Control-All
 async fn handle_http_request(
     mut stream: tokio::net::TcpStream,
     request: &str,
+    peeked_len: usize,
     dashboard_dir: Option<&Path>,
     last_tabs: &Arc<RwLock<Vec<Value>>>,
     last_engine: &Arc<RwLock<String>>,
     session_name: &str,
 ) {
-    // Consume the peeked data from the stream
-    let content_len = request.len();
-    let mut discard = vec![0u8; content_len];
+    let mut discard = vec![0u8; peeked_len];
     let _ = stream.read_exact(&mut discard).await;
 
     let first_line = request.lines().next().unwrap_or("");
@@ -1103,25 +1116,25 @@ async fn handle_http_request(
         return;
     }
 
-    let (status, content_type, body) = if path == "/api/sessions" {
+    let (status, content_type, body): (&str, &str, Vec<u8>) = if path == "/api/sessions" {
         (
             "200 OK",
             "application/json; charset=utf-8",
-            discover_sessions(),
+            discover_sessions().into_bytes(),
         )
     } else if path == "/api/tabs" {
         let tabs = last_tabs.read().await;
         (
             "200 OK",
             "application/json; charset=utf-8",
-            serde_json::to_string(&*tabs).unwrap_or_else(|_| "[]".to_string()),
+            serde_json::to_string(&*tabs).unwrap_or_else(|_| "[]".to_string()).into_bytes(),
         )
     } else if path == "/api/status" {
         let engine = last_engine.read().await;
         (
             "200 OK",
             "application/json; charset=utf-8",
-            format!(r#"{{"engine":"{}"}}"#, *engine),
+            format!(r#"{{"engine":"{}"}}"#, *engine).into_bytes(),
         )
     } else {
         match dashboard_dir {
@@ -1129,7 +1142,7 @@ async fn handle_http_request(
             None => (
                 "200 OK",
                 "text/html; charset=utf-8",
-                DASHBOARD_NOT_INSTALLED_HTML.to_string(),
+                DASHBOARD_NOT_INSTALLED_HTML.as_bytes().to_vec(),
             ),
         }
     };
@@ -1141,7 +1154,7 @@ async fn handle_http_request(
         body.len()
     );
     let _ = stream.write_all(response.as_bytes()).await;
-    let _ = stream.write_all(body.as_bytes()).await;
+    let _ = stream.write_all(&body).await;
 }
 
 /// Extract the HTTP body from a raw request string (headers + body in one buffer).
@@ -1192,7 +1205,7 @@ async fn relay_command_to_daemon(session_name: &str, body: &str) -> Result<Strin
     Ok(response_line.trim().to_string())
 }
 
-fn serve_static_file(dir: &Path, url_path: &str) -> (&'static str, &'static str, String) {
+fn serve_static_file(dir: &Path, url_path: &str) -> (&'static str, &'static str, Vec<u8>) {
     let clean = url_path.trim_start_matches('/');
     let file_path = if clean.is_empty() {
         dir.join("index.html")
@@ -1201,12 +1214,11 @@ fn serve_static_file(dir: &Path, url_path: &str) -> (&'static str, &'static str,
         if joined.is_file() {
             joined
         } else {
-            // SPA fallback
             dir.join("index.html")
         }
     };
 
-    match std::fs::read_to_string(&file_path) {
+    match std::fs::read(&file_path) {
         Ok(content) => {
             let ext = file_path.extension().and_then(|e| e.to_str()).unwrap_or("");
             let ct = match ext {
@@ -1224,7 +1236,7 @@ fn serve_static_file(dir: &Path, url_path: &str) -> (&'static str, &'static str,
         Err(_) => (
             "404 Not Found",
             "text/html; charset=utf-8",
-            "<html><body><p>404 Not Found</p></body></html>".to_string(),
+            b"<html><body><p>404 Not Found</p></body></html>".to_vec(),
         ),
     }
 }
@@ -1246,23 +1258,6 @@ code { background: #262626; padding: 2px 8px; border-radius: 4px; font-size: 14p
 </body>
 </html>"#;
 
-/// Resolve the socket directory where `.stream` files live.
-fn get_socket_dir() -> PathBuf {
-    if let Ok(dir) = std::env::var("AGENT_BROWSER_SOCKET_DIR") {
-        if !dir.is_empty() {
-            return PathBuf::from(dir);
-        }
-    }
-    if let Ok(xdg) = std::env::var("XDG_RUNTIME_DIR") {
-        if !xdg.is_empty() {
-            return PathBuf::from(xdg).join("agent-browser");
-        }
-    }
-    if let Some(home) = dirs::home_dir() {
-        return home.join(".agent-browser");
-    }
-    std::env::temp_dir().join("agent-browser")
-}
 
 /// Discover all active streaming sessions by reading `*.stream` files.
 /// Stale entries (dead process) are removed on the fly.
@@ -1373,13 +1368,6 @@ fn is_process_alive(pid_path: &Path) -> bool {
     }
 }
 
-/// Public accessor for the dashboard installation directory.
-pub fn get_dashboard_dir() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".agent-browser")
-        .join("dashboard")
-}
 
 fn timestamp_ms() -> u64 {
     std::time::SystemTime::now()
@@ -1536,11 +1524,11 @@ async fn handle_dashboard_connection(
     }
 
     let dir_ref = dashboard_dir.as_deref();
-    let (status, content_type, body) = if path == "/api/sessions" {
+    let (status, content_type, body): (&str, &str, Vec<u8>) = if path == "/api/sessions" {
         (
             "200 OK",
             "application/json; charset=utf-8",
-            discover_sessions(),
+            discover_sessions().into_bytes(),
         )
     } else {
         match dir_ref {
@@ -1548,7 +1536,7 @@ async fn handle_dashboard_connection(
             None => (
                 "200 OK",
                 "text/html; charset=utf-8",
-                DASHBOARD_NOT_INSTALLED_HTML.to_string(),
+                DASHBOARD_NOT_INSTALLED_HTML.as_bytes().to_vec(),
             ),
         }
     };
@@ -1560,7 +1548,7 @@ async fn handle_dashboard_connection(
         body.len()
     );
     let _ = stream.write_all(response.as_bytes()).await;
-    let _ = stream.write_all(body.as_bytes()).await;
+    let _ = stream.write_all(&body).await;
 }
 
 /// Read the full POST body from a request. First checks if the body is already
@@ -1655,8 +1643,8 @@ async fn exec_cli(body: &str) -> Result<String, String> {
     .to_string())
 }
 
-/// Force-kill a session daemon by reading its .pid file and sending SIGKILL,
-/// then cleaning up socket/pid/stream/engine files.
+/// Kill a session daemon by sending SIGTERM, then SIGKILL if it survives.
+/// Cleans up socket/pid/stream/engine files afterward.
 fn kill_session(body: &str) -> Result<String, String> {
     let parsed: Value = serde_json::from_str(body)
         .map_err(|e| format!("Invalid JSON: {}", e))?;
@@ -1677,15 +1665,19 @@ fn kill_session(body: &str) -> Result<String, String> {
     let pid: u32 = pid_str.trim().parse()
         .map_err(|_| format!("Invalid PID in file: {}", pid_str.trim()))?;
 
-    // Send SIGKILL
     #[cfg(unix)]
     {
         unsafe {
-            libc::kill(pid as i32, libc::SIGKILL);
+            libc::kill(pid as i32, libc::SIGTERM);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        if unsafe { libc::kill(pid as i32, 0) } == 0 {
+            unsafe {
+                libc::kill(pid as i32, libc::SIGKILL);
+            }
         }
     }
 
-    // Clean up session files
     for ext in &["pid", "sock", "stream", "engine", "extensions"] {
         let _ = std::fs::remove_file(dir.join(format!("{}.{}", session, ext)));
     }
