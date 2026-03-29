@@ -438,6 +438,15 @@ impl DaemonState {
                             .and_then(|v| v.as_str())
                             .unwrap_or("");
                         if matches!(dialog_type, "beforeunload" | "alert") {
+                            let message = event
+                                .params
+                                .get("message")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("");
+                            eprintln!(
+                                "[auto-dismiss] {} dialog accepted: {}",
+                                dialog_type, message
+                            );
                             let sid = event.session_id.clone().unwrap_or_default();
                             let _ = client
                                 .send_command(
