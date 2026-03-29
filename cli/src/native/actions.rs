@@ -443,18 +443,21 @@ impl DaemonState {
                                 .get("message")
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("");
-                            eprintln!(
-                                "[auto-dismiss] {} dialog accepted: {}",
-                                dialog_type, message
-                            );
+                            eprintln!("[auto-dismiss] {} dialog: {}", dialog_type, message);
                             let sid = event.session_id.clone().unwrap_or_default();
-                            let _ = client
+                            if let Err(e) = client
                                 .send_command(
                                     "Page.handleJavaScriptDialog",
                                     Some(json!({ "accept": true })),
                                     Some(&sid),
                                 )
-                                .await;
+                                .await
+                            {
+                                eprintln!(
+                                    "[auto-dismiss] failed to dismiss {} dialog: {}",
+                                    dialog_type, e
+                                );
+                            }
                         }
                     }
                     Ok(_) => continue,
@@ -8280,8 +8283,7 @@ mod tests {
         // alert/beforeunload should NOT populate pending_dialog.
         let auto_dialog = true;
         for dialog_type in &["alert", "beforeunload"] {
-            let auto_handled =
-                auto_dialog && matches!(*dialog_type, "beforeunload" | "alert");
+            let auto_handled = auto_dialog && matches!(*dialog_type, "beforeunload" | "alert");
             assert!(
                 auto_handled,
                 "{dialog_type} should be auto-handled when auto_dialog is true"
@@ -8294,12 +8296,8 @@ mod tests {
         // confirm and prompt should NOT be auto-handled even when auto_dialog is true.
         let auto_dialog = true;
         for dialog_type in &["confirm", "prompt"] {
-            let auto_handled =
-                auto_dialog && matches!(*dialog_type, "beforeunload" | "alert");
-            assert!(
-                !auto_handled,
-                "{dialog_type} should NOT be auto-handled"
-            );
+            let auto_handled = auto_dialog && matches!(*dialog_type, "beforeunload" | "alert");
+            assert!(!auto_handled, "{dialog_type} should NOT be auto-handled");
         }
     }
 }
