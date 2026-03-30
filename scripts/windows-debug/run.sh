@@ -24,28 +24,38 @@ export AWS_DEFAULT_REGION="$REGION"
 
 COMMAND="$*"
 
-# Prepend PATH setup so cargo/git are always available
-FULL_COMMAND="
-\$env:PATH = \"\$env:USERPROFILE\\.cargo\\bin;C:\\Program Files\\Git\\cmd;\$env:PATH\"
-$COMMAND
-"
+PARAMS_FILE=$(mktemp)
+trap "rm -f $PARAMS_FILE" EXIT
+
+python3 -c '
+import json, sys
+path_setup = "$env:PATH = \"$env:USERPROFILE\\.cargo\\bin;C:\\Program Files\\Git\\cmd;$env:PATH\""
+cmd = path_setup + "\n" + sys.argv[1]
+json.dump({"commands": [cmd]}, open(sys.argv[2], "w"))
+' "$COMMAND" "$PARAMS_FILE"
 
 COMMAND_ID=$(aws ssm send-command \
   --instance-ids "$INSTANCE_ID" \
   --document-name "AWS-RunPowerShellScript" \
-  --parameters "commands=[$(echo "$FULL_COMMAND" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')]" \
+  --parameters "file://$PARAMS_FILE" \
   --timeout-seconds 3600 \
   --query "Command.CommandId" --output text)
 
-echo "Command sent (ID: $COMMAND_ID). Waiting for output..."
+echo "Command sent (ID: $COMMAND_ID). Waiting..." >&2
 
-# Poll for completion
 while true; do
   RESULT=$(aws ssm get-command-invocation \
     --command-id "$COMMAND_ID" \
-    --instance-id "$INSTANCE_ID" 2>&1) || true
+    --instance-id "$INSTANCE_ID" \
+    --output json 2>&1) || true
 
-  STATUS=$(echo "$RESULT" | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('Status','Unknown'))" 2>/dev/null || echo "Pending")
+  STATUS=$(echo "$RESULT" | python3 -c "
+import sys, json
+try:
+    print(json.loads(sys.stdin.read()).get('Status', 'Unknown'))
+except:
+    print('Pending')
+" 2>/dev/null)
 
   case "$STATUS" in
     Success)
@@ -53,8 +63,11 @@ while true; do
 import sys, json
 r = json.loads(sys.stdin.read())
 out = r.get('StandardOutputContent', '').rstrip()
+err = r.get('StandardErrorContent', '').rstrip()
 if out:
     print(out)
+if err:
+    print(err, file=sys.stderr)
 "
       exit 0
       ;;
@@ -67,7 +80,6 @@ err = r.get('StandardErrorContent', '').rstrip()
 if out:
     print(out)
 if err:
-    print('--- STDERR ---', file=sys.stderr)
     print(err, file=sys.stderr)
 "
       echo "Command $STATUS." >&2
