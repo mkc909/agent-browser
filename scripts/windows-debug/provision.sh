@@ -21,31 +21,63 @@ fi
 echo "Provisioning Windows debug instance in $REGION..."
 
 # --- IAM Role for SSM ---
-ROLE_NAME="$NAME_PREFIX-ssm-role"
-PROFILE_NAME="$NAME_PREFIX-instance-profile"
+ROLE_NAME="${IAM_ROLE_NAME:-$NAME_PREFIX-ssm-role}"
+PROFILE_NAME="${INSTANCE_PROFILE_NAME:-$NAME_PREFIX-instance-profile}"
 
-if ! aws iam get-role --role-name "$ROLE_NAME" &>/dev/null; then
-  echo "Creating IAM role: $ROLE_NAME"
-  aws iam create-role \
-    --role-name "$ROLE_NAME" \
-    --assume-role-policy-document '{
-      "Version": "2012-10-17",
-      "Statement": [{
-        "Effect": "Allow",
-        "Principal": {"Service": "ec2.amazonaws.com"},
-        "Action": "sts:AssumeRole"
-      }]
-    }' \
-    --no-cli-pager
-
-  aws iam attach-role-policy \
-    --role-name "$ROLE_NAME" \
-    --policy-arn arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+if aws iam get-instance-profile --instance-profile-name "$PROFILE_NAME" &>/dev/null; then
+  echo "Instance profile $PROFILE_NAME already exists, reusing."
 else
-  echo "IAM role $ROLE_NAME already exists, reusing."
-fi
+  echo "Instance profile $PROFILE_NAME not found. Creating IAM resources..."
 
-if ! aws iam get-instance-profile --instance-profile-name "$PROFILE_NAME" &>/dev/null; then
+  if ! aws iam get-role --role-name "$ROLE_NAME" &>/dev/null; then
+    echo "Creating IAM role: $ROLE_NAME"
+    if ! aws iam create-role \
+      --role-name "$ROLE_NAME" \
+      --assume-role-policy-document '{
+        "Version": "2012-10-17",
+        "Statement": [{
+          "Effect": "Allow",
+          "Principal": {"Service": "ec2.amazonaws.com"},
+          "Action": "sts:AssumeRole"
+        }]
+      }' \
+      --no-cli-pager; then
+
+      echo ""
+      echo "Error: Failed to create IAM role (see error above)."
+      echo ""
+      echo "Ask an IAM admin to create the following, then re-run with:"
+      echo "  INSTANCE_PROFILE_NAME=<name> ./scripts/windows-debug/provision.sh"
+      echo ""
+      echo "What the admin needs to create:"
+      echo "  1. IAM Role: $ROLE_NAME"
+      echo "     - Trusted entity: EC2 (ec2.amazonaws.com)"
+      echo "     - Attached policy: AmazonSSMManagedInstanceCore"
+      echo "  2. Instance Profile: $PROFILE_NAME"
+      echo "     - With the above role added to it"
+      echo ""
+      echo "Or run these commands with an account that has iam:CreateRole permission:"
+      echo ""
+      echo "  aws iam create-role --role-name $ROLE_NAME \\"
+      echo "    --assume-role-policy-document '{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"ec2.amazonaws.com\"},\"Action\":\"sts:AssumeRole\"}]}'"
+      echo ""
+      echo "  aws iam attach-role-policy --role-name $ROLE_NAME \\"
+      echo "    --policy-arn arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+      echo ""
+      echo "  aws iam create-instance-profile --instance-profile-name $PROFILE_NAME"
+      echo ""
+      echo "  aws iam add-role-to-instance-profile \\"
+      echo "    --instance-profile-name $PROFILE_NAME --role-name $ROLE_NAME"
+      exit 1
+    fi
+
+    aws iam attach-role-policy \
+      --role-name "$ROLE_NAME" \
+      --policy-arn arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+  else
+    echo "IAM role $ROLE_NAME already exists."
+  fi
+
   echo "Creating instance profile: $PROFILE_NAME"
   aws iam create-instance-profile --instance-profile-name "$PROFILE_NAME" --no-cli-pager
   aws iam add-role-to-instance-profile \
@@ -53,8 +85,6 @@ if ! aws iam get-instance-profile --instance-profile-name "$PROFILE_NAME" &>/dev
     --role-name "$ROLE_NAME"
   echo "Waiting for instance profile propagation..."
   sleep 10
-else
-  echo "Instance profile $PROFILE_NAME already exists, reusing."
 fi
 
 # --- Security Group (no inbound rules) ---
