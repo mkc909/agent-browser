@@ -41,6 +41,7 @@ export interface ModelInfo {
   id: string;
   name?: string;
   owned_by?: string;
+  context_window?: number;
 }
 
 export const chatEnabledAtom = atom(false);
@@ -69,6 +70,7 @@ export function useChatStatusSync() {
               id: m.id as string,
               name: (m.name as string) || undefined,
               owned_by: (m.owned_by as string) || undefined,
+              context_window: typeof m.context_window === "number" ? m.context_window : undefined,
             }));
             models.sort((a, b) => a.id.localeCompare(b.id));
             set(availableModelsAtom, models);

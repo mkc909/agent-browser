@@ -1,3 +1,5 @@
+use std::sync::OnceLock;
+
 use serde_json::{json, Value};
 
 use tokio::io::AsyncWriteExt;
@@ -61,37 +63,56 @@ pub(super) async fn handle_models_request(stream: &mut tokio::net::TcpStream) {
     let _ = stream.write_all(body.as_bytes()).await;
 }
 
-const CHAT_SYSTEM_PROMPT: &str = r#"You are an AI assistant that controls a browser through agent-browser. You can execute browser automation commands using the agent_browser tool.
+const SKILL_AGENT_BROWSER: &str = include_str!("../../../../skills/agent-browser/SKILL.md");
+const SKILL_SLACK: &str = include_str!("../../../../skills/slack/SKILL.md");
+const SKILL_ELECTRON: &str = include_str!("../../../../skills/electron/SKILL.md");
+const SKILL_DOGFOOD: &str = include_str!("../../../../skills/dogfood/SKILL.md");
+const SKILL_AGENTCORE: &str = include_str!("../../../../skills/agentcore/SKILL.md");
 
-When the user asks you to do something in the browser, use the tool to execute commands. Always use --json flag output is handled automatically.
+fn strip_frontmatter(s: &str) -> &str {
+    if !s.starts_with("---") {
+        return s;
+    }
+    if let Some(end) = s[3..].find("---") {
+        let after = &s[3 + end + 3..];
+        after.trim_start_matches(['\n', '\r'])
+    } else {
+        s
+    }
+}
 
-Available commands:
-- open <url>: Navigate to a URL
-- snapshot -i: Get interactive elements with refs (use this to see what's on the page)
-- click @e<n>: Click an element by ref
-- fill @e<n> "text": Clear input and type text
-- type @e<n> "text": Type text without clearing
-- select @e<n> "option": Select dropdown option
-- check @e<n>: Check/uncheck checkbox
-- press <Key>: Press a key (Enter, Tab, Escape, etc.)
-- scroll down/up <pixels>: Scroll the page
-- screenshot: Take a screenshot
-- get text @e<n>: Get element text
-- get url: Get current URL
-- get title: Get page title
-- wait @e<n>: Wait for element to appear
-- wait --load networkidle: Wait for network idle
-- wait <ms>: Wait milliseconds
-- back / forward / reload: Navigate history
-- page: Get full page text content
-- eval "<js>": Evaluate JavaScript in the page
+fn get_system_prompt() -> &'static str {
+    static PROMPT: OnceLock<String> = OnceLock::new();
+    PROMPT.get_or_init(|| {
+        let skills = [
+            ("agent-browser", SKILL_AGENT_BROWSER),
+            ("slack", SKILL_SLACK),
+            ("electron", SKILL_ELECTRON),
+            ("dogfood", SKILL_DOGFOOD),
+            ("agentcore", SKILL_AGENTCORE),
+        ];
 
-Workflow:
-1. Use "snapshot -i" to see interactive elements and their @refs
-2. Use refs from the snapshot to interact with elements (click, fill, etc.)
-3. After actions, take another snapshot to verify the result
+        let mut sections = String::new();
+        for (name, content) in skills {
+            let body = strip_frontmatter(content);
+            sections.push_str(&format!("\n\n<skill name=\"{}\">\n{}\n</skill>", name, body.trim()));
+        }
 
-Keep responses concise. Execute commands proactively when the user's intent is clear."#;
+        format!(
+            r#"You are an AI assistant that controls a browser through agent-browser. You can execute browser automation commands using the agent_browser tool.
+
+When the user asks you to do something in the browser, use the tool to execute commands. The --json flag is added automatically; do not include it yourself.
+
+In the tool command string, pass only the CLI arguments without the `agent-browser` prefix or `--session` flag. For example, to navigate use `open https://example.com`, not `agent-browser open https://example.com`.
+
+Keep responses concise. Execute commands proactively when the user's intent is clear.
+
+The following skill references describe agent-browser capabilities in detail. Use them when deciding which commands to run and how to approach tasks.
+{sections}"#,
+        )
+    })
+}
+
 
 const CHAT_TOOLS: &str = r#"[{"type":"function","function":{"name":"agent_browser","description":"Execute an agent-browser command against the active browser session. The command string contains the CLI arguments (without the 'agent-browser' prefix or session flag).","parameters":{"type":"object","properties":{"command":{"type":"string","description":"The command to execute, e.g. 'open https://google.com' or 'snapshot -i' or 'click @e3'"}},"required":["command"]}}}]"#;
 
@@ -301,7 +322,7 @@ pub(super) async fn handle_chat_request(stream: &mut tokio::net::TcpStream, body
     let model = parsed.get("model").and_then(|v| v.as_str()).unwrap_or(&default_model).to_string();
     let session = parsed.get("session").and_then(|v| v.as_str()).unwrap_or("default").to_string();
 
-    let mut openai_messages: Vec<Value> = vec![json!({"role": "system", "content": CHAT_SYSTEM_PROMPT})];
+    let mut openai_messages: Vec<Value> = vec![json!({"role": "system", "content": get_system_prompt()})];
     if let Some(arr) = messages.as_array() {
         for msg in arr {
             let Some(role) = msg.get("role").and_then(|r| r.as_str()) else { continue };

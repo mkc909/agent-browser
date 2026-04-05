@@ -1,11 +1,11 @@
 "use client";
 
-import { useRef, useEffect, useState, useCallback } from "react";
+import { useRef, useEffect, useState, useCallback, useMemo } from "react";
 import { useAtomValue } from "jotai/react";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import { Streamdown } from "streamdown";
-import { getChatApiUrl, chatModelAtom } from "@/store/chat";
+import { getChatApiUrl, chatModelAtom, availableModelsAtom } from "@/store/chat";
 import { activeSessionNameAtom } from "@/store/sessions";
 import { ModelSelector } from "@/components/model-selector";
 import { shikiTheme } from "@/lib/shiki-theme";
@@ -62,16 +62,15 @@ const SUGGESTIONS = [
 ];
 
 interface ToolInvocationPart {
-  type: "tool-invocation";
+  type: string;
   toolCallId: string;
-  toolName?: string;
   state: string;
   input?: Record<string, unknown>;
   output?: unknown;
 }
 
 function isToolPart(part: { type: string }): part is ToolInvocationPart {
-  return part.type === "tool-invocation";
+  return part.type.startsWith("tool-");
 }
 
 function truncateOutput(text: string, maxLines = 30): string {
@@ -101,7 +100,8 @@ function formatOutput(raw: unknown): string | null {
 
 function ToolCallBlock({ part }: { part: ToolInvocationPart }) {
   const [expanded, setExpanded] = useState(false);
-  const command = (part.input as { command?: string })?.command ?? part.toolName ?? "";
+  const toolName = part.type.split("-").slice(1).join("-");
+  const command = (part.input as { command?: string })?.command ?? toolName;
   const isDone = part.state === "output-available";
   const isRunning = !isDone;
   const output = isDone ? formatOutput(part.output) : null;
@@ -164,6 +164,61 @@ function ToolCallBlock({ part }: { part: ToolInvocationPart }) {
   );
 }
 
+const DEFAULT_CONTEXT_WINDOW = 128000;
+
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
+function formatTokenCount(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(0)}K`;
+  return `${n}`;
+}
+
+function ContextMeter({ used, total }: { used: number; total: number }) {
+  const ratio = Math.min(used / total, 1);
+  const size = 24;
+  const strokeWidth = 2.5;
+  const r = (size - strokeWidth) / 2;
+  const circumference = 2 * Math.PI * r;
+  const offset = circumference * (1 - ratio);
+  const color =
+    ratio > 0.9 ? "text-destructive" : ratio > 0.7 ? "text-yellow-500" : "text-muted-foreground/50";
+
+  return (
+    <div
+      className="relative shrink-0"
+      title={`${formatTokenCount(used)} / ${formatTokenCount(total)} tokens`}
+    >
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={r}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={strokeWidth}
+          className="text-muted-foreground/10"
+        />
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={r}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={strokeWidth}
+          strokeDasharray={circumference}
+          strokeDashoffset={offset}
+          strokeLinecap="round"
+          className={cn(color, "transition-[stroke-dashoffset] duration-300")}
+          transform={`rotate(-90 ${size / 2} ${size / 2})`}
+        />
+      </svg>
+    </div>
+  );
+}
+
 const DEFAULT_MODEL = "anthropic/claude-haiku-4.5";
 
 export function ChatPanel() {
@@ -204,6 +259,25 @@ export function ChatPanel() {
   const visibleError = error && !errorDismissed ? error : undefined;
   const isLoading = status === "streaming" || status === "submitted";
   const hasMessages = messages.length > 0 || !!visibleError;
+
+  const models = useAtomValue(availableModelsAtom);
+  const estimatedTokens = useMemo(() => {
+    let total = 0;
+    for (const msg of messages) {
+      for (const part of msg.parts) {
+        if (part.type === "text") total += estimateTokens(part.text);
+        else if (isToolPart(part)) {
+          if (part.input) total += estimateTokens(JSON.stringify(part.input));
+          if (part.output) total += estimateTokens(typeof part.output === "string" ? part.output : JSON.stringify(part.output));
+        }
+      }
+    }
+    return total;
+  }, [messages]);
+  const contextWindow = useMemo(() => {
+    const match = models.find((m) => m.id === selectedModel);
+    return match?.context_window ?? DEFAULT_CONTEXT_WINDOW;
+  }, [models, selectedModel]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -264,13 +338,8 @@ export function ChatPanel() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center justify-between gap-2 px-3 py-2 shrink-0 border-b border-border/40">
-        <div className="flex items-center gap-1.5 min-w-0">
-          <span className="text-[11px] font-medium text-muted-foreground shrink-0">AI Chat</span>
-          <span className="text-muted-foreground/30 shrink-0">/</span>
-          <ModelSelector value={selectedModel} onChange={setSelectedModel} />
-        </div>
-        {hasMessages && (
+      {hasMessages && (
+        <div className="flex items-center justify-end px-3 py-1.5 shrink-0 border-b border-border/40">
           <button
             onClick={handleClear}
             className="text-muted-foreground hover:text-foreground transition-colors shrink-0"
@@ -278,8 +347,8 @@ export function ChatPanel() {
           >
             <Trash2 className="size-3" />
           </button>
-        )}
-      </div>
+        </div>
+      )}
 
       <ScrollArea className="flex-1 min-h-0">
         <div className="p-3 space-y-3">
@@ -396,37 +465,46 @@ export function ChatPanel() {
         </div>
       </ScrollArea>
 
-      <form
-        onSubmit={handleSubmit}
-        className="flex items-end gap-1.5 px-3 py-2 border-t border-border/40 shrink-0"
-      >
-        <textarea
-          ref={inputRef}
-          value={input}
-          onChange={(e) => {
-            setInput(e.target.value);
-            e.target.style.height = "auto";
-            e.target.style.height = `${e.target.scrollHeight}px`;
-          }}
-          rows={1}
-          placeholder="Ask something..."
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              handleSubmit(e);
-            }
-          }}
-          className="flex-1 bg-transparent text-xs text-foreground outline-none resize-none max-h-24 leading-relaxed placeholder:text-muted-foreground"
-        />
-        <button
-          type="submit"
-          disabled={isLoading || !input.trim()}
-          className="bg-primary text-primary-foreground rounded-full p-1 hover:bg-primary/90 transition-colors disabled:opacity-30 shrink-0"
-          aria-label="Send message"
-        >
-          <ArrowUp className="size-3" />
-        </button>
-      </form>
+      <div className="shrink-0 border-t border-border">
+        <form onSubmit={handleSubmit}>
+          <div className="px-3 pt-2 pb-1.5">
+            <textarea
+              ref={inputRef}
+              value={input}
+              onChange={(e) => {
+                setInput(e.target.value);
+                e.target.style.height = "auto";
+                e.target.style.height = `${e.target.scrollHeight}px`;
+              }}
+              rows={1}
+              placeholder="Ask something..."
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSubmit(e);
+                }
+              }}
+              className="w-full bg-transparent text-xs text-foreground outline-none resize-none max-h-24 leading-relaxed placeholder:text-muted-foreground"
+            />
+          </div>
+          <div className="flex items-center justify-between px-3 pb-2">
+            <ModelSelector value={selectedModel} onChange={setSelectedModel} />
+            <div className="flex items-center gap-2">
+              {hasMessages && (
+                <ContextMeter used={estimatedTokens} total={contextWindow} />
+              )}
+              <button
+                type="submit"
+                disabled={isLoading || !input.trim()}
+                className="bg-primary text-primary-foreground rounded-full p-1 hover:bg-primary/90 transition-colors disabled:opacity-30 shrink-0"
+                aria-label="Send message"
+              >
+                <ArrowUp className="size-3" />
+              </button>
+            </div>
+          </div>
+        </form>
+      </div>
     </div>
   );
 }
