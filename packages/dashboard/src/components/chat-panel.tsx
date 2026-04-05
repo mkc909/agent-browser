@@ -453,6 +453,15 @@ export function ChatPanel() {
           )}
 
           {messages.map((message) => {
+            if (message.id.startsWith("compaction-")) {
+              return (
+                <div key={message.id} className="flex items-center gap-2 text-[10px] text-muted-foreground/60">
+                  <div className="flex-1 border-t border-border/40" />
+                  <span>Earlier messages summarized</span>
+                  <div className="flex-1 border-t border-border/40" />
+                </div>
+              );
+            }
             if (!hasVisibleContent(message.parts)) return null;
             return (
               <div key={message.id}>

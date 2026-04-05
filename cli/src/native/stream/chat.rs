@@ -627,7 +627,7 @@ pub(super) async fn handle_chat_request(stream: &mut tokio::net::TcpStream, body
         let _ = stream.write_all(ev.as_bytes()).await;
     }
 
-    for _step in 0..10 {
+    for _step in 0..50 {
         let step_ev = "data: {\"type\":\"start-step\"}\n\n";
         if stream.write_all(step_ev.as_bytes()).await.is_err() { return; }
 
