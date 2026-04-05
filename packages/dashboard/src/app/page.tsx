@@ -6,9 +6,11 @@ import { useSessionsSync } from "@/store/sessions";
 import { useStreamSync, hasConsoleErrorsAtom, consoleLogsAtom } from "@/store/stream";
 import { useActivitySync } from "@/store/activity";
 import { activeExtensionsAtom } from "@/store/sessions";
+import { useChatStatusSync } from "@/store/chat";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { Viewport } from "@/components/viewport";
 import { ActivityFeed } from "@/components/activity-feed";
+import { ChatPanel } from "@/components/chat-panel";
 import { ConsolePanel } from "@/components/console-panel";
 import { StoragePanel } from "@/components/storage-panel";
 import { ExtensionsPanel } from "@/components/extensions-panel";
@@ -26,15 +28,17 @@ export default function DashboardPage() {
   useStreamSync(activePort);
   useSessionsSync();
   useActivitySync();
+  useChatStatusSync();
 
   const isDesktop = useMediaQuery("(min-width: 768px)");
   const hasConsoleErrors = useAtomValue(hasConsoleErrorsAtom);
   const activeExtensions = useAtomValue(activeExtensionsAtom);
 
   const sidePanel = (
-    <Tabs defaultValue="activity" className="flex h-full flex-col">
+    <Tabs defaultValue="chat" className="flex h-full flex-col">
       <div className="shrink-0 px-2 pt-1">
         <TabsList variant="line" className="h-7 w-full">
+          <TabsTrigger value="chat" className="text-[11px]">Chat</TabsTrigger>
           <TabsTrigger value="activity" className="text-[11px]">Activity</TabsTrigger>
           <TabsTrigger value="console" className="text-[11px]">
             Console
@@ -66,6 +70,9 @@ export default function DashboardPage() {
       </TabsContent>
       <TabsContent value="extensions" className="min-h-0 flex-1 overflow-hidden">
         <ExtensionsPanel />
+      </TabsContent>
+      <TabsContent value="chat" className="min-h-0 flex-1 overflow-hidden">
+        <ChatPanel />
       </TabsContent>
     </Tabs>
   );

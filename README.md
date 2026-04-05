@@ -650,6 +650,19 @@ The dashboard displays:
 - **Activity feed** -- chronological command/result stream with timing and expandable details
 - **Console output** -- browser console messages (log, warn, error)
 - **Session creation** -- create new sessions from the UI with local engines (Chrome, Lightpanda) or cloud providers (AgentCore, Browserbase, Browserless, Browser Use, Kernel)
+- **AI Chat** -- chat with an AI assistant directly in the dashboard (requires Vercel AI Gateway configuration)
+
+### AI Chat
+
+The dashboard includes an optional AI chat panel powered by the Vercel AI Gateway. Set these environment variables to enable it:
+
+```bash
+export AGENT_BROWSER_AI_API_KEY=gw_your_key_here
+export AGENT_BROWSER_AI_MODEL=anthropic/claude-haiku-4.5           # optional, this is the default
+export AGENT_BROWSER_AI_GATEWAY_URL=https://ai-gateway.vercel.sh   # optional, this is the default
+```
+
+The Chat tab is always visible in the dashboard. When `AGENT_BROWSER_AI_API_KEY` is set, the Rust server proxies requests to the gateway and streams responses back using the Vercel AI SDK's UI Message Stream protocol. Without the key, sending a message shows an error inline.
 
 ## Configuration
 

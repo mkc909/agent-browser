@@ -2912,6 +2912,9 @@ Environment:
   AGENT_BROWSER_SCREENSHOT_DIR   Default screenshot output directory
   AGENT_BROWSER_SCREENSHOT_QUALITY JPEG quality 0-100
   AGENT_BROWSER_SCREENSHOT_FORMAT Screenshot format: png, jpeg
+  AGENT_BROWSER_AI_GATEWAY_URL   Vercel AI Gateway base URL (default: https://ai-gateway.vercel.sh)
+  AGENT_BROWSER_AI_API_KEY       API key for the AI Gateway (enables dashboard AI chat)
+  AGENT_BROWSER_AI_MODEL         Default AI model (default: anthropic/claude-haiku-4.5)
 
 Install:
   npm install -g agent-browser           # npm

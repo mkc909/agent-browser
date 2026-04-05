@@ -764,6 +764,18 @@ agent-browser dashboard stop
 
 The dashboard runs independently of browser sessions on port 4848 (configurable with `--port`). All sessions automatically stream to the dashboard. Sessions can also be created from the dashboard UI with local engines or cloud providers.
 
+### Dashboard AI Chat
+
+The dashboard has an optional AI chat tab powered by the Vercel AI Gateway. Enable it by setting:
+
+```bash
+export AGENT_BROWSER_AI_API_KEY=gw_your_key_here
+export AGENT_BROWSER_AI_MODEL=anthropic/claude-haiku-4.5           # optional default
+export AGENT_BROWSER_AI_GATEWAY_URL=https://ai-gateway.vercel.sh   # optional default
+```
+
+The Chat tab is always visible in the dashboard. Set `AGENT_BROWSER_AI_API_KEY` to enable AI responses.
+
 ## Ready-to-Use Templates
 
 | Template                                                                 | Description                         |
