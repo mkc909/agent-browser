@@ -142,14 +142,7 @@ async fn handle_connection(
         )
         .await;
     } else {
-        handle_http_request(
-            stream,
-            &buf[..n],
-            &last_tabs,
-            &last_engine,
-            &session_name,
-        )
-        .await;
+        handle_http_request(stream, &buf[..n], &last_tabs, &last_engine, &session_name).await;
     }
 }
 

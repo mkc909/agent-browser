@@ -280,7 +280,11 @@ pub(super) async fn relay_command_to_daemon(
 
 pub(super) fn serve_embedded_file(url_path: &str) -> (&'static str, &'static str, Vec<u8>) {
     let clean = url_path.trim_start_matches('/');
-    let key = if clean.is_empty() { "index.html" } else { clean };
+    let key = if clean.is_empty() {
+        "index.html"
+    } else {
+        clean
+    };
 
     let file = DashboardAssets::get(key).or_else(|| DashboardAssets::get("index.html"));
 

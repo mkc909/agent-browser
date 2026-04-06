@@ -772,7 +772,6 @@ fn package_exists_apt(pkg: &str) -> bool {
         .unwrap_or(false)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -961,4 +960,3 @@ mod tests {
         );
     }
 }
-

@@ -418,7 +418,6 @@ impl StreamServer {
         });
         let _ = self.frame_tx.send(msg.to_string());
     }
-
 }
 
 pub(crate) fn timestamp_ms() -> u64 {
