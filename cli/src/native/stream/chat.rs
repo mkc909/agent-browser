@@ -340,7 +340,7 @@ const ALLOWED_COMMANDS: &[&str] = &[
     "find", "role", "text", "label", "placeholder", "alt",
     "testid", "first", "last", "nth",
     "mouse", "touchscreen", "attribute", "property",
-    "set", "get", "is", "stream", "tab", "clipboard",
+    "set", "get", "is", "stream", "tab", "clipboard", "session",
 ];
 
 const ALLOWED_GLOBAL_FLAGS: &[&str] = &["--session", "--engine"];
