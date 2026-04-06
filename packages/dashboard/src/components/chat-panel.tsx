@@ -11,7 +11,7 @@ import { ModelSelector } from "@/components/model-selector";
 import { shikiTheme } from "@/lib/shiki-theme";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
-import { ArrowUp, Square, Trash2, ChevronRight, ImagePlus, X, Loader, Copy, Check } from "lucide-react";
+import { ArrowUp, Square, Trash2, ChevronRight, ImagePlus, X, Loader, Copy, Check, Download } from "lucide-react";
 
 const chatComponents = {
   h1: ({ node: _node, ...props }: any) => <p className="font-bold" {...props} />,
@@ -473,6 +473,37 @@ export function ChatPanel() {
     requestAnimationFrame(() => inputRef.current?.focus());
   }, [setMessages, storageKey]);
 
+  const handleDownload = useCallback(() => {
+    const data = messages.map((msg) => ({
+      id: msg.id,
+      role: msg.role,
+      parts: msg.parts.map((p) => {
+        if (p.type === "text") return { type: "text", text: p.text };
+        if (p.type === "file") return { type: "file", filename: (p as any).filename };
+        if (isToolPart(p)) {
+          const out = typeof p.output === "string" ? p.output : JSON.stringify(p.output);
+          const stripped = out?.replace(/"image":"data:[^"]*"/g, '"image":"[stripped]"');
+          return {
+            type: p.type,
+            toolName: (p as any).toolName,
+            state: (p as any).state,
+            input: (p as any).input,
+            output: stripped,
+          };
+        }
+        return { type: p.type };
+      }),
+    }));
+    const json = JSON.stringify({ session: chatId, model: selectedModel, messages: data }, null, 2);
+    const blob = new Blob([json], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `chat-${chatId}-${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [messages, chatId, selectedModel]);
+
   const hasVisibleContent = (parts: (typeof messages)[number]["parts"]): boolean => {
     return parts.some(
       (p) => (p.type === "text" && p.text.length > 0) || p.type === "file" || isToolPart(p),
@@ -482,7 +513,14 @@ export function ChatPanel() {
   return (
     <div className="flex h-full flex-col">
       {hasMessages && (
-        <div className="flex items-center justify-end px-3 py-1.5 shrink-0 border-b border-border/40">
+        <div className="flex items-center justify-end gap-2 px-3 py-1.5 shrink-0 border-b border-border/40">
+          <button
+            onClick={handleDownload}
+            className="text-muted-foreground hover:text-foreground transition-colors shrink-0"
+            aria-label="Download conversation"
+          >
+            <Download className="size-3" />
+          </button>
           <button
             onClick={handleClear}
             className="text-muted-foreground hover:text-foreground transition-colors shrink-0"
