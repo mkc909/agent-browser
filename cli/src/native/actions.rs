@@ -1956,9 +1956,6 @@ async fn handle_launch(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
     state.start_dialog_handler();
     state.update_stream_client().await;
 
-    // Load storage state (--state / storageState) if provided.
-    load_storage_state(state, &storage_state_owned).await?;
-
     // Enable Fetch interception (domain filtering and/or proxy auth).
     // Only call Fetch.enable once to avoid overwriting handleAuthRequests.
     {
@@ -1991,6 +1988,11 @@ async fn handle_launch(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
             }
         }
     }
+
+    // Load storage state only after Fetch interception is active so replayed
+    // origin navigations go through the same domain and proxy handling as
+    // normal browser traffic.
+    load_storage_state(state, &storage_state_owned).await?;
 
     Ok(json!({ "launched": true }))
 }
