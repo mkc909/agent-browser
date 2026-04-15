@@ -1706,6 +1706,7 @@ async fn handle_launch(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
                 .collect()
         });
     let storage_state = cmd.get("storageState").and_then(|v| v.as_str());
+    let storage_state_owned = storage_state.map(|s| s.to_string());
 
     let launch_options = LaunchOptions {
         headless,
@@ -1825,6 +1826,7 @@ async fn handle_launch(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
         state.start_fetch_handler();
         state.start_dialog_handler();
         state.update_stream_client().await;
+        try_load_storage_state(state, &storage_state_owned).await;
         return Ok(json!({ "launched": true }));
     }
 
@@ -1835,6 +1837,7 @@ async fn handle_launch(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
         state.start_fetch_handler();
         state.start_dialog_handler();
         state.update_stream_client().await;
+        try_load_storage_state(state, &storage_state_owned).await;
         return Ok(json!({ "launched": true }));
     }
 
@@ -1845,6 +1848,7 @@ async fn handle_launch(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
         state.start_fetch_handler();
         state.start_dialog_handler();
         state.update_stream_client().await;
+        try_load_storage_state(state, &storage_state_owned).await;
         return Ok(json!({ "launched": true }));
     }
 
@@ -1881,6 +1885,7 @@ async fn handle_launch(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
                         state.start_dialog_handler();
                         state.update_stream_client().await;
                         write_provider_file(&state.session_id, provider);
+                        try_load_storage_state(state, &storage_state_owned).await;
 
                         if let Some(info) = providers::get_agentcore_info() {
                             return Ok(json!({
@@ -1941,13 +1946,7 @@ async fn handle_launch(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
     state.update_stream_client().await;
 
     // Load storage state (--state / storageState) if provided.
-    if let Some(state_path) = storage_state {
-        if let Some(ref mgr) = state.browser {
-            if let Ok(session_id) = mgr.active_session_id() {
-                let _ = state::load_state(&mgr.client, session_id, state_path).await;
-            }
-        }
-    }
+    try_load_storage_state(state, &storage_state_owned).await;
 
     // Enable Fetch interception (domain filtering and/or proxy auth).
     // Only call Fetch.enable once to avoid overwriting handleAuthRequests.
