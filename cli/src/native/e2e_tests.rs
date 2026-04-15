@@ -46,7 +46,7 @@ fn native_test_fixture_url(name: &str) -> String {
     )
 }
 
-async fn create_storage_state_with_cookie(path: &str, cookie_value: &str) {
+async fn create_storage_state_with_cookie(path: &str, cookie_name: &str, cookie_value: &str) {
     let mut state = DaemonState::new();
 
     let resp = execute_command(
@@ -72,7 +72,7 @@ async fn create_storage_state_with_cookie(path: &str, cookie_value: &str) {
         &json!({
             "id": "3",
             "action": "cookies_set",
-            "name": "storage_reload_test",
+            "name": cookie_name,
             "value": cookie_value,
             "domain": ".example.com",
             "path": "/",
@@ -4393,7 +4393,7 @@ async fn e2e_state_flag_missing_file_fails_launch() {
             "id": "10",
             "action": "launch",
             "headless": true,
-            "args": ["--no-sandbox"],
+            "args": ["--no-sandbox", "--disable-dev-shm-usage"],
             "storageState": &missing_path
         }),
         &mut state,
@@ -4407,13 +4407,17 @@ async fn e2e_state_flag_missing_file_fails_launch() {
         "Unexpected error for missing storageState file: {}",
         error
     );
+    assert!(
+        state.browser.is_none(),
+        "failed storageState launch should roll back the browser"
+    );
 }
 
-/// Repeated launch calls on the same live session should apply a new
-/// `storageState` file without forcing a close/relaunch.
+/// Repeated launch calls with `storageState` should relaunch a clean browser so
+/// stale cookies do not survive from the previous state file.
 #[tokio::test]
 #[ignore]
-async fn e2e_reused_launch_applies_updated_storage_state() {
+async fn e2e_storage_state_launch_restarts_clean_browser() {
     let state_one = std::env::temp_dir()
         .join(format!(
             "agent-browser-e2e-storage-reuse-1-{}.json",
@@ -4429,8 +4433,8 @@ async fn e2e_reused_launch_applies_updated_storage_state() {
         .to_string_lossy()
         .to_string();
 
-    create_storage_state_with_cookie(&state_one, "first").await;
-    create_storage_state_with_cookie(&state_two, "second").await;
+    create_storage_state_with_cookie(&state_one, "storage_reload_first", "first").await;
+    create_storage_state_with_cookie(&state_two, "storage_reload_second", "second").await;
 
     let mut state = DaemonState::new();
 
@@ -4464,7 +4468,7 @@ async fn e2e_reused_launch_applies_updated_storage_state() {
     assert!(
         cookies
             .iter()
-            .any(|c| c["name"] == "storage_reload_test" && c["value"] == "first"),
+            .any(|c| c["name"] == "storage_reload_first" && c["value"] == "first"),
         "first storageState should be applied on the initial launch"
     );
 
@@ -4481,9 +4485,9 @@ async fn e2e_reused_launch_applies_updated_storage_state() {
     .await;
     assert_success(&resp);
     assert_eq!(
-        get_data(&resp)["reused"],
-        true,
-        "storageState-only changes should reuse the existing browser"
+        get_data(&resp).get("reused"),
+        None,
+        "storageState launch should start from a clean browser"
     );
 
     let resp = execute_command(
@@ -4499,8 +4503,14 @@ async fn e2e_reused_launch_applies_updated_storage_state() {
     assert!(
         cookies
             .iter()
-            .any(|c| c["name"] == "storage_reload_test" && c["value"] == "second"),
-        "second storageState should replace the first one on a reused launch"
+            .any(|c| c["name"] == "storage_reload_second" && c["value"] == "second"),
+        "second storageState should be applied after relaunch"
+    );
+    assert!(
+        !cookies
+            .iter()
+            .any(|c| c["name"] == "storage_reload_first" && c["value"] == "first"),
+        "stale cookies from the first storageState should not survive relaunch"
     );
 
     let resp = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
