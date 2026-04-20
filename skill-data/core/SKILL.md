@@ -439,6 +439,7 @@ agent-browser react inspect <fiberId>            # props, hooks, state, source
 agent-browser react renders start                # begin re-render recording
 agent-browser react renders stop                 # print render profile
 agent-browser react suspense [--only-dynamic]    # Suspense boundaries + classifier
+agent-browser react suspense-log [--clear]       # always-on suspend/resolve transition log
 agent-browser vitals [url]                       # LCP/CLS/TTFB/FCP/INP + hydration
 agent-browser pushstate <url>                    # SPA navigation (auto-detects Next router)
 ```
@@ -471,6 +472,7 @@ That pulls in:
 - `references/trust-boundaries.md` — safety rules for driving a real browser
 - `references/session-management.md` — persistence, multi-session workflows
 - `references/profiling.md` — Chrome DevTools tracing and profiling
+- `references/suspense-log.md` — always-on Suspense transition recorder (PPR shell analysis)
 - `references/video-recording.md` — video capture options
 - `references/proxy-support.md` — proxy configuration
 - `templates/*` — starter shell scripts for auth, capture, form automation
